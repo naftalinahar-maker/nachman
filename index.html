@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>קרב רובוטים | Rogue Steel</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%2305070a'/%3E%3Cpolygon points='23,16 5,20 12,16 5,12' fill='%234ff3ff'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+  <canvas id="game" width="960" height="640"></canvas>
+
+  <div id="hud" class="hidden">
+    <div class="hud-top">
+      <div class="bar-group">
+        <div class="bar-label">שריון</div>
+        <div class="bar health-bar"><div id="healthFill" class="bar-fill"></div></div>
+      </div>
+      <div class="bar-group">
+        <div class="bar-label">חימום נשק</div>
+        <div class="bar heat-bar"><div id="heatFill" class="bar-fill"></div></div>
+      </div>
+      <div class="bar-group dash-group">
+        <div class="bar-label">דאש</div>
+        <div class="bar dash-bar"><div id="dashFill" class="bar-fill"></div></div>
+      </div>
+    </div>
+    <div class="hud-side">
+      <div class="stat"><span class="stat-label">ניקוד</span><span id="score">0</span></div>
+      <div class="stat"><span class="stat-label">גל</span><span id="wave">1</span></div>
+      <div class="stat"><span class="stat-label">שיא</span><span id="highscore">0</span></div>
+    </div>
+    <div id="waveBanner" class="wave-banner hidden"></div>
+    <div id="overheatWarning" class="overheat-warning hidden">⚠ חימום יתר ⚠</div>
+  </div>
+
+  <div id="startScreen" class="overlay">
+    <div class="panel">
+      <h1>ROGUE STEEL</h1>
+      <p class="subtitle">קרבות רובוטים מסוכנים — משחק פעולה</p>
+      <div class="instructions">
+        <div class="row"><span class="key">WASD</span> תנועה</div>
+        <div class="row"><span class="key">עכבר</span> כיוון וכיוון אש</div>
+        <div class="row"><span class="key">קליק / רווח</span> ירי לייזר</div>
+        <div class="row"><span class="key">Shift</span> דאש התחמקות</div>
+        <div class="row"><span class="key">P / Esc</span> השהיה</div>
+      </div>
+      <p class="hint">שרוד גל אחר גל של רובוטים עוינים. הנשק מתחמם — אל תירה בלי הפסקה. אספו שדרוגים מרובוטים מושמדים.</p>
+      <button id="startBtn" class="btn">התחל קרב</button>
+    </div>
+  </div>
+
+  <div id="pauseScreen" class="overlay hidden">
+    <div class="panel">
+      <h2>מושהה</h2>
+      <button id="resumeBtn" class="btn">המשך</button>
+    </div>
+  </div>
+
+  <div id="gameOverScreen" class="overlay hidden">
+    <div class="panel">
+      <h2 class="danger">הרובוט הושמד</h2>
+      <p id="finalStats" class="subtitle"></p>
+      <button id="restartBtn" class="btn">קרב מחדש</button>
+    </div>
+  </div>
+</div>
+<script src="game.js" defer></script>
+</body>
+</html>
