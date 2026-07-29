@@ -1,894 +1,815 @@
 'use strict';
 
-/* ============================================================
-   ROGUE STEEL — top-down arcade robot combat.
-   No RPG systems: no leveling, no inventory, no dialogue.
-   Score-based wave survival with skill-based movement/aim/heat.
-   ============================================================ */
+/* ============================== Utilities ============================== */
 
-// ---------- utility ----------
-const TAU = Math.PI * 2;
-function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
-function rand(a, b) { return a + Math.random() * (b - a); }
-function pick(arr) { return arr[(Math.random() * arr.length) | 0]; }
-function dist(ax, ay, bx, by) { return Math.hypot(ax - bx, ay - by); }
-function angleTo(ax, ay, bx, by) { return Math.atan2(by - ay, bx - ax); }
-function lerp(a, b, t) { return a + (b - a) * t; }
-
-function circleRectCollide(cx, cy, cr, rx, ry, rw, rh) {
-  const nx = clamp(cx, rx, rx + rw);
-  const ny = clamp(cy, ry, ry + rh);
-  const dx = cx - nx, dy = cy - ny;
-  return (dx * dx + dy * dy) < cr * cr;
-}
-
-// resolve a circle out of a rect (push out along shortest axis)
-function resolveCircleRect(entity, rx, ry, rw, rh) {
-  const cx = entity.x, cy = entity.y, cr = entity.r;
-  const nx = clamp(cx, rx, rx + rw);
-  const ny = clamp(cy, ry, ry + rh);
-  let dx = cx - nx, dy = cy - ny;
-  let d = Math.hypot(dx, dy);
-  if (d === 0) { dx = 1; dy = 0; d = 1; }
-  if (d < cr) {
-    const push = cr - d;
-    entity.x += (dx / d) * push;
-    entity.y += (dy / d) * push;
+function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
+function randInt(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
+function shuffle(arr) {
+  const a = arr.slice();
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
   }
+  return a;
 }
+function firstName(fullName) { return fullName.split(' ')[0]; }
 
-// ---------- audio (synthesized, no external assets) ----------
-const Audio_ = {
-  ctx: null,
-  ensure() {
-    if (!this.ctx) {
-      const AC = window.AudioContext || window.webkitAudioContext;
-      this.ctx = new AC();
-    }
-    if (this.ctx.state === 'suspended') this.ctx.resume();
-    return this.ctx;
+/* ============================== Content data ============================== */
+
+const LAST_NAMES = ['כהן', 'לוי', 'גרין', 'רוזנברג', 'שוורץ', 'פרידמן', 'וייס', 'קפלן', 'אשכולי', 'ברקוביץ'];
+const FIRST_M = ['שלמה', 'משה', 'אברהם', 'יעקב', 'מנחם', 'ברוך', 'שמעון', 'נתן'];
+const FIRST_F = ['רבקה', 'שרה', 'מרים', 'לאה', 'חנה', 'רחל', 'גולדה', 'פייגה'];
+
+const ARCHETYPES = [
+  {
+    key: 'shochet', jobTitle: 'השוחט הכשר', gender: 'm',
+    locId: 'market1', locLabel: 'דוכן הקצביה בשוק', bgType: 'market', tint: '#b3392b',
+    portrait: { skin: '#d9a86c', cloth: '#5a4a3a', apron: true, apronColor: '#f2efe6', facial: 'mustache', hat: 'flatcap', hatColor: '#3a2a1c' },
+    alibiPlace: 'בשוק, בודק משלוח בשר טרי מהספק', alibiProof: 'קבלת משלוח עם חותמת שעה מדויקת',
+    hidingSpot: 'גיליון העיתון הישן שמונח על דוכן הבשר',
+    greet: 'נו, בלש נחמן, מה כבר יש לחקור? יש לי עוף טרי שמחכה לפני שהוא מתקלקל.',
+    idle: ['הסכין הזאת חדה כמו שמועה בשכונה שלנו.', 'תגיד לי כשתגלה מי עשה את זה — בינתיים הבשר לא שוחט את עצמו.'],
+    nervousIdle: 'למה אתה עדיין כאן, בלש? יש לי... יש לי הרבה עבודה היום.'
   },
-  tone(freq, dur, type, vol, sweepTo) {
-    try {
-      const ctx = this.ensure();
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = type || 'sine';
-      osc.frequency.setValueAtTime(freq, ctx.currentTime);
-      if (sweepTo) osc.frequency.exponentialRampToValueAtTime(Math.max(1, sweepTo), ctx.currentTime + dur);
-      gain.gain.setValueAtTime(vol || 0.15, ctx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + dur);
-      osc.connect(gain).connect(ctx.destination);
-      osc.start();
-      osc.stop(ctx.currentTime + dur);
-    } catch (e) { /* audio not available */ }
+  {
+    key: 'cantor', jobTitle: 'החזן של בית הכנסת', gender: 'm',
+    locId: 'shul1', locLabel: 'הבימה בבית הכנסת', bgType: 'shul', tint: '#3a5a8a',
+    portrait: { skin: '#e0b48a', cloth: '#2c2440', facial: 'beard', tallis: true },
+    alibiPlace: 'בחזרות מקהלה שנמשכו עד שעה מאוחרת', alibiProof: 'עדותם המשותפת של אנשי המקהלה',
+    hidingSpot: 'ניירות התווים המונחים על עמוד התפילה',
+    greet: 'הקול שלי מוקדש לתפילה, בלש, לא לרכילות. אבל שאל, אני אשתדל לעזור.',
+    idle: ['שיר טוב מרפא את הנשמה, גם כשהיא דואגת.', 'אני מקווה שתמצא את מי שעשה את זה, זה מכביד על כל הקהילה.'],
+    nervousIdle: 'הגרון שלי... יבש היום. קשה לי לדבר עכשיו, באמת.'
   },
-  noise(dur, vol) {
-    try {
-      const ctx = this.ensure();
-      const bufSize = ctx.sampleRate * dur;
-      const buf = ctx.createBuffer(1, bufSize, ctx.sampleRate);
-      const data = buf.getChannelData(0);
-      for (let i = 0; i < bufSize; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / bufSize);
-      const src = ctx.createBufferSource();
-      src.buffer = buf;
-      const gain = ctx.createGain();
-      gain.gain.setValueAtTime(vol || 0.2, ctx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + dur);
-      src.connect(gain).connect(ctx.destination);
-      src.start();
-    } catch (e) { /* audio not available */ }
+  {
+    key: 'grocer', jobTitle: 'בעלת המכולת', gender: 'f',
+    locId: 'market2', locLabel: 'המכולת של השכונה', bgType: 'market', tint: '#4a7a4a',
+    portrait: { skin: '#cf9a6a', cloth: '#5a7a5a', apron: true, apronColor: '#e8dcb0', hat: 'scarf', hatColor: '#b3392b' },
+    alibiPlace: 'סוגרת את הקופה וסופרת סחורה עד הלילה', alibiProof: 'פנקס הקופה עם רישום השעה המדויק',
+    hidingSpot: 'ארגז הסחורה הריק במחסן הקטן',
+    greet: 'תרצה תפוח, בלש? זה טרי מהבוקר. עכשיו, מה אתה רוצה לדעת?',
+    idle: ['הלקוחות מדברים על זה כל היום, האמת.', 'אני מקווה שתתפוס אותם מהר, זה לא בריא לעסקים בשכונה.'],
+    nervousIdle: 'ה... הקופה לא מסתדרת לי היום, סליחה, בוא נדבר אחר כך.'
   },
-  shoot() { this.tone(rand(760, 840), 0.08, 'sawtooth', 0.06, 220); },
-  enemyShoot() { this.tone(rand(300, 360), 0.1, 'square', 0.05, 120); },
-  hit() { this.noise(0.08, 0.12); },
-  explosion() { this.noise(0.35, 0.28); this.tone(90, 0.3, 'sine', 0.15, 30); },
-  dash() { this.tone(200, 0.15, 'sine', 0.1, 500); },
-  powerup() { this.tone(500, 0.12, 'triangle', 0.12, 900); },
-  overheat() { this.tone(140, 0.4, 'sawtooth', 0.1, 60); },
-  playerHit() { this.tone(160, 0.18, 'square', 0.14, 70); },
-  gameOver() { this.tone(220, 0.6, 'sawtooth', 0.15, 40); },
-};
-
-// ---------- input ----------
-const Input = {
-  keys: new Set(),
-  mouse: { x: 0, y: 0, down: false },
-  init(canvas) {
-    window.addEventListener('keydown', e => {
-      this.keys.add(e.code);
-      if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space'].includes(e.code)) e.preventDefault();
-    });
-    window.addEventListener('keyup', e => this.keys.delete(e.code));
-    canvas.addEventListener('mousemove', e => {
-      const r = canvas.getBoundingClientRect();
-      this.mouse.x = (e.clientX - r.left) * (canvas.width / r.width);
-      this.mouse.y = (e.clientY - r.top) * (canvas.height / r.height);
-    });
-    canvas.addEventListener('mousedown', () => this.mouse.down = true);
-    window.addEventListener('mouseup', () => this.mouse.down = false);
-    canvas.addEventListener('contextmenu', e => e.preventDefault());
+  {
+    key: 'matchmaker', jobTitle: 'השדכנית של השכונה', gender: 'f',
+    locId: 'cafe1', locLabel: 'השולחן הקבוע בבית הקפה', bgType: 'cafe', tint: '#9a4a6a',
+    portrait: { skin: '#e8c39a', cloth: '#9a4a6a', hat: 'flowerhat', hatColor: '#7a3a5a', facial: 'glasses' },
+    alibiPlace: 'בפגישת שידוך חשובה אצל משפחה אחרת', alibiProof: 'מכתב תודה חתום מהמשפחה המדוברת',
+    hidingSpot: 'תיק המסמכים האישי, מתחת לפנקס השידוכים',
+    greet: 'בלש נחמן! יושב לבד? יש לי בחורה מושלמת בשבילך. אה, ואתה רצית לשאול משהו, נכון?',
+    idle: ['רכילות היא לא חטא, זה מקצוע.', 'אני יודעת הכל על כולם בשכונה הזאת. כמעט הכל.'],
+    nervousIdle: 'בוא נדבר על משהו אחר, נו? מה שלום אמא שלך?'
   },
-  down(code) { return this.keys.has(code); },
-};
+  {
+    key: 'jeweler', jobTitle: 'הצורף ותכשיטן', gender: 'm',
+    locId: 'workshop1', locLabel: 'סדנת הצורף', bgType: 'workshop', tint: '#d99a3d',
+    portrait: { skin: '#d9a86c', cloth: '#4a3a2a', apron: true, apronColor: '#3a3a3a', facial: 'loupe' },
+    alibiPlace: 'בתערוכת תכשיטים בעיר השכנה', alibiProof: 'כרטיס כניסה לתערוכה עם תאריך מודפס',
+    hidingSpot: 'הכספת הקטנה שנשארה פתוחה למחצה',
+    greet: 'זהירות עם האצבעות, יש כאן חומרים יקרים. מה אתה מחפש, בלש?',
+    idle: ['זהב לא משקר, בלש. אנשים כן.', 'אני מקווה שהעבודה שלי לא תיפגע מכל הבלגן הזה.'],
+    nervousIdle: 'האור כאן... חלש היום. קשה לי להראות לך משהו כרגע.'
+  },
+  {
+    key: 'gabbai', jobTitle: 'הגבאי של בית הכנסת', gender: 'm',
+    locId: 'shul2', locLabel: 'מחסן הספרים של בית הכנסת', bgType: 'shul', tint: '#6a4a8a',
+    portrait: { skin: '#c99a6a', cloth: '#3a3a2a', facial: 'fullbeard', hat: 'kippah', hatColor: '#1c1c3a' },
+    alibiPlace: 'מסדר סידורים ומפתחות עד השעות הקטנות', alibiProof: 'עדות של המתפללים האחרונים שיצאו',
+    hidingSpot: 'הארון העתיק שבו שמורים ספרי הקהילה',
+    greet: 'ברוך הבא, בלש. בית הכנסת פתוח לכולם, גם לחוקרים.',
+    idle: ['המפתחות האלה זוכרים כל דלת שנפתחה כאן.', 'אני שומר על המקום הזה עשרים שנה, זה כואב לי אישית.'],
+    nervousIdle: 'המפתחות שלי... איפה שמתי את המפתחות שלי. רגע.'
+  }
+];
 
-// ---------- particles ----------
-class Particle {
-  constructor(x, y, vx, vy, life, color, size) {
-    this.x = x; this.y = y; this.vx = vx; this.vy = vy;
-    this.life = life; this.maxLife = life;
-    this.color = color; this.size = size;
-  }
-  update(dt) {
-    this.x += this.vx * dt; this.y += this.vy * dt;
-    this.vx *= 0.94; this.vy *= 0.94;
-    this.life -= dt;
-    return this.life > 0;
-  }
-  draw(ctx) {
-    const t = clamp(this.life / this.maxLife, 0, 1);
-    ctx.globalAlpha = t;
-    ctx.fillStyle = this.color;
-    ctx.beginPath();
-    ctx.arc(this.x, this.y, this.size * t, 0, TAU);
-    ctx.fill();
-    ctx.globalAlpha = 1;
-  }
+const CASE_TEMPLATES = [
+  { stolenItem: 'כתר הכסף של ספר התורה', crimeLocLabel: 'בבית הכנסת', ownerLabel: 'כל הקהילה' },
+  { stolenItem: 'גביע הקידוש המשפחתי העתיק', crimeLocLabel: 'בביתו של הרב אשכולי', ownerLabel: 'הרב אשכולי' },
+  { stolenItem: 'שעון הכיס של הסבא, מורשת המשפחה', crimeLocLabel: 'בדירתה של גברת פרל', ownerLabel: 'גברת פרל, אלמנה כבודה' },
+  { stolenItem: 'תכשיט האירוסין שהוזמן במיוחד', crimeLocLabel: 'בסדנת הצורף', ownerLabel: 'זוג צעיר מהשכונה' }
+];
+
+const METHODS = ['מפתח כפול מזויף', 'סולם שהוסתר מאחורי הבניין', 'כלי פריצה מקצועי', 'חלון אחורי שהושאר פתוח בכוונה', 'מפתח רזרבי שהוחלף בשקט', 'עגלת יד קטנה כדי לצאת בלי לעורר חשד'];
+const MOTIVES = ['חוב כספי ישן שלא נפרע', 'קנאה על ירושה שהובטחה למישהו אחר', 'סוד ישן שאיים להתגלות', 'תחרות עסקית מרה בין השניים', 'אהבה נכזבת מלפני שנים רבות', 'עלבון כבוד משפחתי שמעולם לא נסלח'];
+
+const OFFICE_FLAVORS = [
+  'על הקיר תלויה תעודת הוקרה מהקהילה, קצת עקומה.',
+  'ריח של תה צמחים עדיין נודף מהספל על השולחן.',
+  'רדיו ישן משדר בשקט את מהדורת החדשות.',
+  'תיק התיקים הישנים תפוח מרוב עבודה.',
+  'מישהו השאיר כאן מטריה שחורה ישנה, שוב.'
+];
+const CRIME_FLAVORS = [
+  'וילון קרוע מתנפנף בעדינות מהחלון הפתוח.',
+  'כוס תה קרה עדיין עומדת על השולחן, לא נגעו בה.',
+  'שעון קיר ישן נעצר בדיוק בשעת האירוע.',
+  'שטיח מקומט מעיד שמישהו נאבק כאן, או מיהר.'
+];
+const GENERIC_FLAVORS = [
+  'תמונה משפחתית מצהיבה עומדת על המדף.',
+  'קופת צדקה נשמעת חצי מלאה כשמנערים אותה.',
+  'לוח שנה ישן עדיין פתוח בחודש הקודם.',
+  'ניחוח של עוגת דבש טרייה ממלא את החלל.',
+  'מישהו שכח כאן זוג משקפי קריאה.'
+];
+
+const LOC_LABELS = { office: 'המשרד של נחמן', crimescene: 'זירת הגניבה' };
+
+/* ============================== Case generation ============================== */
+
+let caseCounter = parseInt(localStorage.getItem('nachman_case_counter') || '0', 10);
+let casesSolvedTotal = parseInt(localStorage.getItem('nachman_cases_solved') || '0', 10);
+
+function buildSuspectInstance(archetype, idx) {
+  const first = archetype.gender === 'f' ? pick(FIRST_F) : pick(FIRST_M);
+  const last = pick(LAST_NAMES);
+  const spec = archetype.portrait;
+  return {
+    instanceId: 'sus' + idx,
+    archetypeKey: archetype.key,
+    name: `${first} ${last}`,
+    jobTitle: archetype.jobTitle,
+    locId: archetype.locId,
+    locLabel: archetype.locLabel,
+    bgType: archetype.bgType,
+    tint: archetype.tint,
+    portraitSpec: spec,
+    portraitURL: makePortraitDataURL(spec),
+    greet: archetype.greet,
+    idleLines: archetype.idle,
+    nervousIdle: archetype.nervousIdle,
+    alibiPlace: archetype.alibiPlace,
+    alibiProof: archetype.alibiProof,
+    hidingSpot: archetype.hidingSpot,
+    guilty: false
+  };
 }
 
-function burst(game, x, y, color, count, speed, life) {
-  for (let i = 0; i < count; i++) {
-    const a = rand(0, TAU);
-    const s = rand(speed * 0.3, speed);
-    game.particles.push(new Particle(x, y, Math.cos(a) * s, Math.sin(a) * s, rand(life * 0.5, life), color, rand(2, 4)));
-  }
-}
+function generateCase() {
+  caseCounter++;
+  localStorage.setItem('nachman_case_counter', String(caseCounter));
 
-// ---------- bullets ----------
-class Bullet {
-  constructor(x, y, angle, speed, dmg, owner, color, radius) {
-    this.x = x; this.y = y;
-    this.vx = Math.cos(angle) * speed;
-    this.vy = Math.sin(angle) * speed;
-    this.dmg = dmg; this.owner = owner; // 'player' | 'enemy'
-    this.color = color || (owner === 'player' ? '#4ff3ff' : '#ff5b4d');
-    this.r = radius || 4;
-    this.dead = false;
-    this.trail = [];
-  }
-  update(dt, game) {
-    this.trail.push({ x: this.x, y: this.y });
-    if (this.trail.length > 4) this.trail.shift();
-    this.x += this.vx * dt;
-    this.y += this.vy * dt;
-    if (this.x < -20 || this.x > game.W + 20 || this.y < -20 || this.y > game.H + 20) this.dead = true;
-    for (const o of game.obstacles) {
-      if (circleRectCollide(this.x, this.y, this.r, o.x, o.y, o.w, o.h)) { this.dead = true; break; }
-    }
-  }
-  draw(ctx) {
-    ctx.strokeStyle = this.color;
-    ctx.lineWidth = this.r;
-    ctx.lineCap = 'round';
-    ctx.globalAlpha = 0.5;
-    if (this.trail.length > 1) {
-      ctx.beginPath();
-      ctx.moveTo(this.trail[0].x, this.trail[0].y);
-      for (const p of this.trail) ctx.lineTo(p.x, p.y);
-      ctx.stroke();
-    }
-    ctx.globalAlpha = 1;
-    ctx.fillStyle = this.color;
-    ctx.beginPath();
-    ctx.arc(this.x, this.y, this.r, 0, TAU);
-    ctx.fill();
-    ctx.shadowColor = this.color;
-    ctx.shadowBlur = 8;
-    ctx.fill();
-    ctx.shadowBlur = 0;
-  }
-}
+  const template = pick(CASE_TEMPLATES);
+  const method = pick(METHODS);
+  const motive = pick(MOTIVES);
+  const chosenArchetypes = shuffle(ARCHETYPES).slice(0, 4);
+  const suspects = chosenArchetypes.map((a, i) => buildSuspectInstance(a, i));
+  const guiltyIndex = randInt(0, suspects.length - 1);
+  suspects[guiltyIndex].guilty = true;
+  const guiltySuspect = suspects[guiltyIndex];
 
-// ---------- power-ups ----------
-const POWERUP_TYPES = {
-  health: { color: '#4fe07d', symbol: '+' },
-  overdrive: { color: '#ffd447', symbol: '⚡' },
-  shield: { color: '#4ff3ff', symbol: '◈' },
-};
+  const c = {
+    id: caseCounter,
+    stolenItem: template.stolenItem,
+    crimeLocLabel: template.crimeLocLabel,
+    ownerLabel: template.ownerLabel,
+    method, motive,
+    suspects,
+    guiltySuspect,
+    foundClueIds: new Set(),
+    foundOrder: [],
+    spotFoundIds: new Set(),
+    wrongAccusations: 0
+  };
 
-class PowerUp {
-  constructor(x, y, type) {
-    this.x = x; this.y = y; this.type = type; this.r = 12;
-    this.life = 9; this.bob = rand(0, TAU); this.dead = false;
-  }
-  update(dt) {
-    this.life -= dt;
-    this.bob += dt * 4;
-    if (this.life <= 0) this.dead = true;
-  }
-  draw(ctx) {
-    const def = POWERUP_TYPES[this.type];
-    const y = this.y + Math.sin(this.bob) * 4;
-    ctx.save();
-    ctx.translate(this.x, y);
-    if (this.life < 3) ctx.globalAlpha = 0.4 + 0.4 * Math.abs(Math.sin(this.life * 8));
-    ctx.strokeStyle = def.color;
-    ctx.fillStyle = 'rgba(0,0,0,0.4)';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.arc(0, 0, this.r, 0, TAU);
-    ctx.fill();
-    ctx.stroke();
-    ctx.shadowColor = def.color;
-    ctx.shadowBlur = 10;
-    ctx.fillStyle = def.color;
-    ctx.font = 'bold 14px Consolas, monospace';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(def.symbol, 0, 1);
-    ctx.restore();
-  }
-}
-
-// ---------- obstacles ----------
-class Obstacle {
-  constructor(x, y, w, h) { this.x = x; this.y = y; this.w = w; this.h = h; }
-  draw(ctx) {
-    ctx.fillStyle = '#1b232a';
-    ctx.strokeStyle = 'rgba(79,243,255,0.25)';
-    ctx.lineWidth = 2;
-    ctx.fillRect(this.x, this.y, this.w, this.h);
-    ctx.strokeRect(this.x, this.y, this.w, this.h);
-  }
-}
-
-// ---------- player ----------
-class Player {
-  constructor(x, y) {
-    this.x = x; this.y = y; this.r = 16;
-    this.angle = 0;
-    this.speed = 240;
-    this.maxHealth = 100; this.health = 100;
-    this.maxHeat = 100; this.heat = 0;
-    this.overheated = false;
-    this.fireRate = 0.09; this.fireTimer = 0;
-    this.heatPerShot = 9;
-    this.heatDecay = 38;
-    this.overheatDecay = 22;
-    this.dashCooldown = 1.4; this.dashTimer = 0;
-    this.dashDuration = 0.18; this.dashing = 0;
-    this.dashSpeed = 720;
-    this.invuln = 0;
-    this.hitFlash = 0;
-    this.overdriveTimer = 0;
-    this.shieldTimer = 0;
-    this.alive = true;
-  }
-
-  get effectiveFireRate() { return this.overdriveTimer > 0 ? this.fireRate * 0.45 : this.fireRate; }
-  get effectiveHeatPerShot() { return this.overdriveTimer > 0 ? this.heatPerShot * 0.4 : this.heatPerShot; }
-
-  update(dt, game) {
-    // movement
-    let mx = 0, my = 0;
-    if (Input.down('KeyW') || Input.down('ArrowUp')) my -= 1;
-    if (Input.down('KeyS') || Input.down('ArrowDown')) my += 1;
-    if (Input.down('KeyA') || Input.down('ArrowLeft')) mx -= 1;
-    if (Input.down('KeyD') || Input.down('ArrowRight')) mx += 1;
-    const mlen = Math.hypot(mx, my);
-    if (mlen > 0) { mx /= mlen; my /= mlen; }
-
-    this.dashTimer = Math.max(0, this.dashTimer - dt);
-    if (this.dashing > 0) {
-      this.dashing -= dt;
-      this.invuln = Math.max(this.invuln, 0.05);
-    } else if ((Input.down('ShiftLeft') || Input.down('ShiftRight')) && this.dashTimer <= 0 && mlen > 0) {
-      this.dashing = this.dashDuration;
-      this.dashTimer = this.dashCooldown;
-      this.invuln = this.dashDuration + 0.1;
-      Audio_.dash();
-      burst(game, this.x, this.y, '#4ff3ff', 14, 200, 0.4);
-    }
-
-    const curSpeed = this.dashing > 0 ? this.dashSpeed : this.speed;
-    if (this.dashing > 0) {
-      this.x += this._dashDx * curSpeed * dt;
-      this.y += this._dashDy * curSpeed * dt;
+  c.clues = [];
+  c.clues.push({
+    id: 'method_trace',
+    text: `בזירת הגניבה ${c.crimeLocLabel} נמצאו סימנים ל${c.method}. מי שעשה זאת ידע בדיוק מה הוא עושה.`
+  });
+  suspects.forEach(s => {
+    if (s.guilty) {
+      c.clues.push({
+        id: 'motive_' + s.instanceId,
+        forSuspect: s.instanceId,
+        text: `מאחורי ${s.hidingSpot} התגלה מסמך מטריד: ${c.motive}. זה הקשר בין ${s.name} לבין העלמותו/ה של ${c.stolenItem}.`
+      });
     } else {
-      if (mlen > 0) { this._dashDx = mx; this._dashDy = my; }
-      this.x += mx * curSpeed * dt;
-      this.y += my * curSpeed * dt;
+      c.clues.push({
+        id: 'alibi_' + s.instanceId,
+        forSuspect: s.instanceId,
+        clears: true,
+        text: `${s.name} (${s.jobTitle}) מציג/ה ${s.alibiProof}, שמוכיח שבזמן הגניבה היה/תה ${s.alibiPlace}. נראה ש${firstName(s.name)} נקי/ה מחשד.`
+      });
     }
+  });
 
-    this.x = clamp(this.x, this.r, game.W - this.r);
-    this.y = clamp(this.y, this.r, game.H - this.r);
-    for (const o of game.obstacles) resolveCircleRect(this, o.x, o.y, o.w, o.h);
+  c.locations = buildLocationsMap(c);
+  return c;
+}
 
-    // aim
-    this.angle = angleTo(this.x, this.y, Input.mouse.x, Input.mouse.y);
+function buildLocationsMap(c) {
+  const map = {};
+  map.office = {
+    label: LOC_LABELS.office, bgType: 'office', tint: '#d99a3d',
+    spots: [
+      { id: 'office_decor', kind: 'examine', x: 22, y: 55, tip: 'הביטו סביב המשרד', text: pick(OFFICE_FLAVORS) }
+    ]
+  };
+  map.crimescene = {
+    label: LOC_LABELS.crimescene, bgType: 'crimescene', tint: '#3a5a8a',
+    spots: [
+      { id: 'method_trace', kind: 'examine', x: 36, y: 80, tip: 'בדקו את הזירה', isClue: true },
+      { id: 'crime_decor', kind: 'examine', x: 80, y: 42, tip: 'הביטו מסביב', text: pick(CRIME_FLAVORS) }
+    ]
+  };
+  c.suspects.forEach(s => {
+    map[s.locId] = {
+      label: s.locLabel, bgType: s.bgType, tint: s.tint, suspectId: s.instanceId,
+      spots: [
+        { id: 'talk_' + s.instanceId, kind: 'talk', x: 58, y: 82, tip: 'שוחחו עם ' + s.name, suspectId: s.instanceId },
+        { id: 'decor_' + s.instanceId, kind: 'examine', x: 86, y: 38, tip: 'משהו מעניין כאן', text: pick(GENERIC_FLAVORS) }
+      ]
+    };
+  });
+  return map;
+}
 
-    // heat
-    if (this.overheated) {
-      this.heat -= this.overheatDecay * dt;
-      if (this.heat <= 0) { this.heat = 0; this.overheated = false; }
-    } else {
-      this.heat = Math.max(0, this.heat - this.heatDecay * dt * (this._firing ? 0.15 : 1));
-    }
+function introBrief(c) {
+  const names = c.suspects.map(s => s.name).join(', ');
+  return `אתמול בלילה נעלם/ה ${c.stolenItem} ${c.crimeLocLabel}. ${c.ownerLabel} בהלם גמור. מי שביצע את הגניבה השתמש/ה כנראה ב${c.method} כדי לחמוק בלי להשאיר עקבות מיותרים.<br><br>` +
+    `ארבעה תושבים מוכרים היו בסביבה באותו הערב: <b>${names}</b>.<br><br>` +
+    `בלש נחמן — השכונה כולה סומכת עליך. חפשו רמזים, אספו חפצים, ושוחחו עם התושבים. כשתאספו את כל הרמזים, פתחו את הפנקס והצביעו על האשם.`;
+}
 
-    // firing
-    this.fireTimer -= dt;
-    this._firing = false;
-    if ((Input.mouse.down || Input.down('Space')) && !this.overheated) {
-      if (this.fireTimer <= 0) {
-        this.fireTimer = this.effectiveFireRate;
-        this._firing = true;
-        this.heat = Math.min(this.maxHeat, this.heat + this.effectiveHeatPerShot);
-        if (this.heat >= this.maxHeat) { this.overheated = true; Audio_.overheat(); }
-        const spread = rand(-0.03, 0.03);
-        game.bullets.push(new Bullet(
-          this.x + Math.cos(this.angle) * 22,
-          this.y + Math.sin(this.angle) * 22,
-          this.angle + spread, 620, 12 + (this.overdriveTimer > 0 ? 3 : 0), 'player', '#4ff3ff', 4
-        ));
-        Audio_.shoot();
-        burst(game, this.x + Math.cos(this.angle) * 22, this.y + Math.sin(this.angle) * 22, '#bff9ff', 3, 80, 0.15);
-      }
-    }
+/* ============================== Pixel art rendering ============================== */
 
-    this.invuln = Math.max(0, this.invuln - dt);
-    this.hitFlash = Math.max(0, this.hitFlash - dt);
-    this.overdriveTimer = Math.max(0, this.overdriveTimer - dt);
-    this.shieldTimer = Math.max(0, this.shieldTimer - dt);
+const GW = 240, GH = 160;
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+ctx.imageSmoothingEnabled = false;
+
+function R(x, y, w, h, color) { ctx.fillStyle = color; ctx.fillRect(x, y, w, h); }
+
+function shade(hex, amt) {
+  const n = parseInt(hex.slice(1), 16);
+  let r = (n >> 16) + amt, g = ((n >> 8) & 0xff) + amt, b = (n & 0xff) + amt;
+  r = Math.max(0, Math.min(255, r)); g = Math.max(0, Math.min(255, g)); b = Math.max(0, Math.min(255, b));
+  return '#' + (1 << 24 | r << 16 | g << 8 | b).toString(16).slice(1);
+}
+
+function drawFloor(y, h, base) {
+  R(0, y, GW, h, base);
+  for (let x = -10; x < GW; x += 20) R(x, y, 1, h, shade(base, -22));
+}
+
+function drawWindow(x, y, w, h, skyTop, skyBottom) {
+  R(x - 2, y - 2, w + 4, h + 4, '#1c130c');
+  R(x, y, w, h, skyTop);
+  R(x, y + h * 0.6, w, h * 0.4, skyBottom);
+  R(x + w * 0.6, y + h * 0.15, 5, 5, '#f2e6b8');
+}
+
+function bgOffice(tint) {
+  R(0, 0, GW, GH, '#3a2a1c');
+  drawFloor(100, 60, '#2a1c12');
+  drawWindow(14, 16, 56, 46, '#4a3a6a', '#2a2444');
+  for (let i = 0; i < 7; i++) R(14, 18 + i * 6, 56, 2, '#1c130c');
+  R(70, 108, 140, 42, '#5a3a22');
+  R(74, 150, 10, 10, '#2a1c12');
+  R(196, 150, 10, 10, '#2a1c12');
+  R(178, 92, 20, 16, '#241a12');
+  R(184, 96, 8, 8, '#f2c94c');
+  R(186, 98, 4, 4, '#fff3c4');
+  R(214, 30, 4, 78, '#241a12');
+  R(202, 26, 26, 10, tint);
+  R(198, 20, 34, 8, tint);
+  R(90, 112, 34, 4, '#e8dcb0');
+  R(95, 118, 24, 3, '#c9b48a');
+}
+
+function bgCrimescene(tint) {
+  R(0, 0, GW, GH, '#241a2c');
+  drawFloor(100, 60, '#1c1428');
+  drawWindow(160, 16, 50, 46, '#12102a', '#0a0818');
+  R(178, 24, 10, 10, '#e8dcc4');
+  R(30, 90, 34, 30, shade(tint, -40));
+  R(30, 116, 34, 4, '#0c0810');
+  R(20, 130, 3, 3, '#f2efe6');
+  R(28, 134, 3, 3, '#f2efe6');
+  R(36, 132, 3, 3, '#f2efe6');
+  R(44, 128, 3, 3, '#f2efe6');
+  R(150, 96, 40, 8, '#3a2c1c');
+  R(150, 104, 6, 20, '#3a2c1c');
+  R(184, 104, 6, 20, '#3a2c1c');
+  R(60, 60, 20, 30, '#1c1428');
+  R(64, 60, 12, 3, '#4a3a5a');
+}
+
+function bgShul(tint) {
+  R(0, 0, GW, GH, '#2a2038');
+  drawFloor(102, 58, '#241c30');
+  R(90, 10, 60, 60, '#1c1628');
+  R(96, 16, 48, 48, tint);
+  for (let i = 0; i < 4; i++) R(96 + i * 12, 16, 2, 48, '#1c1628');
+  R(88, 96, 10, 4, '#4a3a2a');
+  R(60, 96, 10, 4, '#4a3a2a');
+  R(150, 96, 10, 4, '#4a3a2a');
+  for (let bx = 10; bx < 230; bx += 46) { R(bx, 118, 34, 8, '#3a2a1c'); R(bx, 128, 34, 20, '#2c2016'); }
+  R(112, 6, 16, 6, '#d99a3d');
+  R(116, 0, 8, 8, '#d99a3d');
+}
+
+function bgMarket(tint) {
+  R(0, 0, GW, GH, '#2c2418');
+  drawFloor(104, 56, '#241c10');
+  for (let x = 0; x < GW; x += 20) { R(x, 8, 10, 14, tint); R(x + 10, 8, 10, 14, '#e8dcc4'); }
+  R(0, 22, GW, 6, '#1c130c');
+  R(20, 34, 60, 50, '#4a3a22');
+  for (let i = 0; i < 3; i++) { R(28 + i * 20, 40, 14, 14, shade(tint, 30)); }
+  R(160, 34, 60, 50, '#4a3a22');
+  for (let i = 0; i < 3; i++) { R(168 + i * 20, 40, 14, 20, shade(tint, -10)); }
+  R(90, 98, 60, 10, '#5a4a30');
+}
+
+function bgCafe(tint) {
+  R(0, 0, GW, GH, '#3a2c2a');
+  R(0, 90, GW, 70, '#4a3634');
+  for (let x = 0; x < GW; x += 16) for (let y = 90; y < GH; y += 16) {
+    if (((x / 16) + (y / 16)) % 2 === 0) R(x, y, 16, 16, '#3a2826');
   }
+  drawWindow(16, 16, 60, 50, '#5a4a70', '#3a3060');
+  R(150, 110, 30, 26, '#241a12');
+  R(150, 100, 30, 4, '#e8dcc4');
+  R(160, 90, 3, 12, '#8a6a30');
+  R(60, 118, 26, 20, '#241a12');
+  R(60, 110, 26, 4, '#e8dcc4');
+  R(200, 30, 20, 22, tint);
+}
 
-  takeDamage(amount, game) {
-    if (this.invuln > 0 || this.shieldTimer > 0 || !this.alive) return;
-    this.health -= amount;
-    this.hitFlash = 0.25;
-    this.invuln = 0.5;
-    Audio_.playerHit();
-    game.shake = Math.min(18, game.shake + amount * 0.6);
-    burst(game, this.x, this.y, '#ff5b4d', 10, 140, 0.35);
-    if (this.health <= 0) { this.health = 0; this.alive = false; }
+function bgWorkshop(tint) {
+  R(0, 0, GW, GH, '#241c14');
+  drawFloor(104, 56, '#1c140e');
+  R(20, 30, 100, 60, '#3a2c1c');
+  R(30, 40, 14, 10, '#5a5a5a');
+  R(50, 40, 14, 10, tint);
+  R(70, 40, 14, 10, '#5a5a5a');
+  R(90, 40, 14, 10, tint);
+  R(160, 40, 46, 50, '#1c1c1c');
+  R(168, 50, 30, 30, '#2c2c2c');
+  R(178, 60, 4, 4, tint);
+  R(30, 96, 60, 8, '#4a3a2a');
+  R(190, 100, 5, 20, '#1a1a1a');
+}
+
+const BG_DRAWERS = { office: bgOffice, crimescene: bgCrimescene, shul: bgShul, market: bgMarket, cafe: bgCafe, workshop: bgWorkshop };
+
+function bgAlley() {
+  R(0, 0, GW, GH, '#141020');
+  for (let i = 0; i < 6; i++) {
+    const bw = 30 + (i % 3) * 10;
+    R(i * 42, 30 + (i % 2) * 10, bw, 90, '#1c1830');
+    for (let wy = 36; wy < 100; wy += 14) for (let wx = 4; wx < bw - 4; wx += 12) {
+      if (((wx + wy + i * 7) % 5) === 0) R(i * 42 + wx, wy + (i % 2) * 10, 6, 8, '#e8c94c55');
+    }
   }
+  R(190, 14, 16, 16, '#e8e0c4');
+  drawFloor(120, 40, '#221c30');
+  for (let x = 0; x < GW; x += 60) R(x, 120, 3, 40, '#0c0a14');
+}
 
-  draw(ctx) {
-    ctx.save();
-    ctx.translate(this.x, this.y);
+function drawPerson(cx, feetY, spec, scale) {
+  scale = scale || 1;
+  const skin = spec.skin || '#d9a86c';
+  const cloth = spec.cloth || '#4a3a2a';
+  const pants = spec.pants || shade(cloth, -30);
+  const s = scale;
+  R(cx - 9 * s, feetY - 20 * s, 8 * s, 20 * s, pants);
+  R(cx + 1 * s, feetY - 20 * s, 8 * s, 20 * s, pants);
+  R(cx - 15 * s, feetY - 46 * s, 30 * s, 28 * s, cloth);
+  R(cx - 19 * s, feetY - 44 * s, 5 * s, 22 * s, cloth);
+  R(cx + 14 * s, feetY - 44 * s, 5 * s, 22 * s, cloth);
+  R(cx - 19 * s, feetY - 24 * s, 5 * s, 5 * s, skin);
+  R(cx + 14 * s, feetY - 24 * s, 5 * s, 5 * s, skin);
+  if (spec.apron) R(cx - 13 * s, feetY - 34 * s, 26 * s, 20 * s, spec.apronColor || '#e8e2d0');
+  if (spec.tallis) { R(cx - 15 * s, feetY - 46 * s, 30 * s, 5 * s, '#f2efe6'); R(cx - 15 * s, feetY - 41 * s, 30 * s, 2 * s, '#2a2a4a'); }
+  R(cx - 4 * s, feetY - 50 * s, 8 * s, 5 * s, skin);
+  R(cx - 9 * s, feetY - 66 * s, 18 * s, 17 * s, skin);
+  if (spec.facial === 'mustache') R(cx - 5 * s, feetY - 53 * s, 10 * s, 3 * s, '#2a2018');
+  if (spec.facial === 'beard') R(cx - 8 * s, feetY - 53 * s, 16 * s, 8 * s, '#2a2018');
+  if (spec.facial === 'fullbeard') R(cx - 9 * s, feetY - 53 * s, 18 * s, 13 * s, '#d8d0c0');
+  if (spec.facial === 'glasses') { R(cx - 8 * s, feetY - 60 * s, 6 * s, 4 * s, '#1a1a1a'); R(cx + 2 * s, feetY - 60 * s, 6 * s, 4 * s, '#1a1a1a'); }
+  if (spec.facial === 'loupe') R(cx + 6 * s, feetY - 62 * s, 5 * s, 5 * s, '#3a3a3a');
+  if (spec.hair) R(cx - 9 * s, feetY - 67 * s, 18 * s, 5 * s, spec.hair);
+  if (spec.hat === 'flatcap') { R(cx - 10 * s, feetY - 70 * s, 20 * s, 5 * s, spec.hatColor); R(cx - 6 * s, feetY - 74 * s, 16 * s, 5 * s, spec.hatColor); }
+  if (spec.hat === 'kippah') R(cx - 6 * s, feetY - 70 * s, 12 * s, 5 * s, spec.hatColor);
+  if (spec.hat === 'scarf') { R(cx - 11 * s, feetY - 69 * s, 22 * s, 8 * s, spec.hatColor); R(cx - 11 * s, feetY - 50 * s, 6 * s, 16 * s, spec.hatColor); R(cx + 5 * s, feetY - 50 * s, 6 * s, 16 * s, spec.hatColor); }
+  if (spec.hat === 'flowerhat') { R(cx - 14 * s, feetY - 72 * s, 28 * s, 6 * s, spec.hatColor); R(cx - 6 * s, feetY - 77 * s, 12 * s, 6 * s, spec.hatColor); R(cx + 8 * s, feetY - 79 * s, 4 * s, 4 * s, '#e8c84a'); }
+}
 
-    if (this.shieldTimer > 0) {
-      ctx.strokeStyle = 'rgba(79,243,255,0.7)';
-      ctx.lineWidth = 3;
-      ctx.beginPath();
-      ctx.arc(0, 0, this.r + 8, 0, TAU);
-      ctx.stroke();
-    }
-    if (this.invuln > 0 && this.dashing <= 0) {
-      ctx.globalAlpha = 0.5 + 0.3 * Math.sin(performance.now() / 30);
-    }
+// Detective Nachman's own look: fedora + trench coat, used only in the finale chase.
+const NACHMAN_SPEC = { skin: '#d9a86c', cloth: '#5a4632', facial: 'mustache' };
+function drawNachmanFedora(cx, feetY, scale) {
+  drawPerson(cx, feetY, NACHMAN_SPEC, scale);
+  const s = scale || 1;
+  R(cx - 13 * s, feetY - 71 * s, 26 * s, 4 * s, '#2a2018');
+  R(cx - 8 * s, feetY - 78 * s, 16 * s, 8 * s, '#2a2018');
+}
 
-    // treads/body base
-    ctx.rotate(this.angle);
+function makePortraitDataURL(spec) {
+  const off = document.createElement('canvas');
+  off.width = 40; off.height = 40;
+  const c2 = off.getContext('2d');
+  c2.imageSmoothingEnabled = false;
+  c2.fillStyle = '#20140c'; c2.fillRect(0, 0, 40, 40);
+  const draw = (x, y, w, h, color) => { c2.fillStyle = color; c2.fillRect(x, y, w, h); };
+  const skin = spec.skin || '#d9a86c', cloth = spec.cloth || '#4a3a2a';
+  draw(2, 28, 36, 12, cloth);
+  if (spec.apron) draw(8, 30, 24, 10, spec.apronColor || '#e8e2d0');
+  if (spec.tallis) { draw(2, 28, 36, 4, '#f2efe6'); draw(2, 31, 36, 1, '#2a2a4a'); }
+  draw(15, 22, 10, 8, skin);
+  draw(8, 6, 24, 22, skin);
+  if (spec.facial === 'mustache') draw(13, 19, 14, 3, '#2a2018');
+  if (spec.facial === 'beard') draw(9, 19, 22, 10, '#2a2018');
+  if (spec.facial === 'fullbeard') draw(8, 19, 24, 15, '#d8d0c0');
+  if (spec.facial === 'glasses') { draw(10, 12, 8, 5, '#1a1a1a'); draw(22, 12, 8, 5, '#1a1a1a'); }
+  if (spec.facial === 'loupe') draw(25, 10, 6, 6, '#3a3a3a');
+  if (spec.hair) draw(8, 5, 24, 5, spec.hair);
+  if (spec.hat === 'flatcap') { draw(5, 1, 30, 6, spec.hatColor); draw(11, -3, 20, 6, spec.hatColor); }
+  if (spec.hat === 'kippah') draw(14, 0, 12, 5, spec.hatColor);
+  if (spec.hat === 'scarf') { draw(4, 0, 32, 8, spec.hatColor); draw(4, 6, 7, 22, spec.hatColor); draw(29, 6, 7, 22, spec.hatColor); }
+  if (spec.hat === 'flowerhat') { draw(2, 0, 36, 7, spec.hatColor); draw(12, -5, 16, 7, spec.hatColor); draw(28, -6, 5, 5, '#e8c84a'); }
+  return off.toDataURL();
+}
 
-    // body
-    const flashColor = this.hitFlash > 0 ? '#ff8f80' : '#dff7ff';
-    ctx.fillStyle = '#132028';
-    ctx.strokeStyle = flashColor;
-    ctx.lineWidth = 2.5;
-    ctx.beginPath();
-    ctx.moveTo(this.r, 0);
-    ctx.lineTo(this.r * 0.2, this.r * 0.8);
-    ctx.lineTo(-this.r * 0.9, this.r * 0.6);
-    ctx.lineTo(-this.r * 0.9, -this.r * 0.6);
-    ctx.lineTo(this.r * 0.2, -this.r * 0.8);
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
+/* ============================== State ============================== */
 
-    // turret barrel
-    ctx.fillStyle = '#4ff3ff';
-    ctx.shadowColor = '#4ff3ff';
-    ctx.shadowBlur = this.overdriveTimer > 0 ? 16 : 6;
-    ctx.fillRect(this.r * 0.1, -3, this.r * 1.1, 6);
-    ctx.shadowBlur = 0;
+let state = 'menu';
+let currentCase = null;
+let currentLocId = null;
 
-    // core
-    ctx.beginPath();
-    ctx.fillStyle = this.overheated ? '#ff5b4d' : '#4ff3ff';
-    ctx.arc(0, 0, 5, 0, TAU);
-    ctx.fill();
+const el = id => document.getElementById(id);
+const topbar = el('topbar'), navbar = el('navbar'), toastEl = el('toast');
+const hotspotsEl = el('hotspots');
+const dialogueBar = el('dialogueBar'), dlgPortrait = el('dlgPortrait'), dlgName = el('dlgName'), dlgText = el('dlgText');
 
-    ctx.restore();
+let toastTimer = null;
+function toast(msg, ms) {
+  toastEl.textContent = msg;
+  toastEl.classList.remove('hidden');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toastEl.classList.add('hidden'), ms || 2200);
+}
+
+function updateTopbar() {
+  el('caseTitle').textContent = `תיק #${currentCase.id}: העלמות ${currentCase.stolenItem}`;
+  el('cluesCount').textContent = `${currentCase.foundClueIds.size}/${currentCase.clues.length}`;
+  el('casesSolved').textContent = casesSolvedTotal;
+}
+
+function buildNavbar() {
+  navbar.innerHTML = '';
+  const ids = ['office', 'crimescene', ...currentCase.suspects.map(s => s.locId)];
+  ids.forEach(locId => {
+    const loc = currentCase.locations[locId];
+    const btn = document.createElement('button');
+    btn.className = 'nav-btn';
+    btn.textContent = loc.label;
+    btn.addEventListener('click', () => goToLocation(locId));
+    btn.dataset.locId = locId;
+    navbar.appendChild(btn);
+  });
+  highlightNav();
+}
+function highlightNav() {
+  [...navbar.children].forEach(b => b.classList.toggle('active', b.dataset.locId === currentLocId));
+}
+
+function goToLocation(locId) {
+  currentLocId = locId;
+  highlightNav();
+  closeDialogue();
+  renderScene();
+  buildHotspots();
+}
+
+function renderScene() {
+  const loc = currentCase.locations[currentLocId];
+  const drawer = BG_DRAWERS[loc.bgType];
+  drawer(loc.tint);
+  if (loc.suspectId) {
+    const s = currentCase.suspects.find(x => x.instanceId === loc.suspectId);
+    const talkSpot = loc.spots.find(sp => sp.kind === 'talk');
+    const cx = (talkSpot.x / 100) * GW;
+    const feetY = (talkSpot.y / 100) * GH;
+    drawPerson(cx, feetY, s.portraitSpec, 0.95);
   }
 }
 
-// ---------- enemy types ----------
-const ENEMY_DEFS = {
-  scout: {
-    r: 13, hp: 22, speed: 190, color: '#ff5b4d', score: 60,
-    contactDmg: 12, behavior: 'charge',
-  },
-  gunner: {
-    r: 15, hp: 34, speed: 110, color: '#ff8f3d', score: 90,
-    contactDmg: 8, behavior: 'ranged', fireRate: 1.3, bulletSpeed: 300, bulletDmg: 8,
-  },
-  heavy: {
-    r: 24, hp: 90, speed: 70, color: '#c23bff', score: 160,
-    contactDmg: 10, behavior: 'slam', slamRadius: 90, slamDmg: 26, slamCharge: 1.1,
-  },
-  boss: {
-    r: 40, hp: 620, speed: 85, color: '#ff2d55', score: 900,
-    contactDmg: 20, behavior: 'boss', fireRate: 0.5, bulletSpeed: 260, bulletDmg: 10,
-  },
+function buildHotspots() {
+  hotspotsEl.innerHTML = '';
+  const loc = currentCase.locations[currentLocId];
+  loc.spots.forEach(spot => {
+    const b = document.createElement('button');
+    b.className = 'hotspot' + (currentCase.spotFoundIds.has(spot.id) ? ' found' : '');
+    b.style.left = spot.x + '%';
+    b.style.top = spot.y + '%';
+    b.innerHTML = `<span class="glyph">${spot.kind === 'talk' ? '💬' : '🔍'}</span><span class="tip">${spot.tip}</span>`;
+    b.addEventListener('click', () => onHotspotClick(spot));
+    hotspotsEl.appendChild(b);
+  });
+}
+
+function onHotspotClick(spot) {
+  currentCase.spotFoundIds.add(spot.id);
+  buildHotspots();
+  if (spot.kind === 'talk') {
+    const s = currentCase.suspects.find(x => x.instanceId === spot.suspectId);
+    openDialogueSuspect(s);
+  } else if (spot.isClue) {
+    const clue = currentCase.clues.find(c => c.id === 'method_trace');
+    addClue(clue);
+    openDialogueObject('בדיקת הזירה', clue.text);
+  } else {
+    openDialogueObject('תצפית', spot.text);
+  }
+}
+
+function addClue(clue) {
+  if (currentCase.foundClueIds.has(clue.id)) return;
+  currentCase.foundClueIds.add(clue.id);
+  currentCase.foundOrder.push(clue.text);
+  updateTopbar();
+  toast('📔 רמז חדש נוסף לפנקס הבלש!');
+}
+
+function openDialogueSuspect(s) {
+  dialogueBar.classList.remove('hidden');
+  dlgPortrait.style.backgroundImage = `url(${s.portraitURL})`;
+  dlgPortrait.textContent = '';
+  dlgName.textContent = `${s.name} — ${s.jobTitle}`;
+  const clue = currentCase.clues.find(c => c.forSuspect === s.instanceId);
+  let text = s.greet;
+  if (clue && !currentCase.foundClueIds.has(clue.id)) {
+    text += '<br><br>' + clue.text;
+    addClue(clue);
+  } else {
+    text += '<br><br>' + (s.guilty ? s.nervousIdle : pick(s.idleLines));
+  }
+  dlgText.innerHTML = text;
+}
+
+function openDialogueObject(title, text) {
+  dialogueBar.classList.remove('hidden');
+  dlgPortrait.style.backgroundImage = '';
+  dlgPortrait.textContent = '🔍';
+  dlgName.textContent = title;
+  dlgText.innerHTML = text;
+}
+
+function closeDialogue() { dialogueBar.classList.add('hidden'); }
+
+/* ============================== Notebook & Accusation ============================== */
+
+function openNotebook() {
+  el('notebookScreen').classList.remove('hidden');
+  const list = el('suspectList');
+  list.innerHTML = '';
+  currentCase.suspects.forEach(s => {
+    const alibiClue = currentCase.clues.find(c => c.forSuspect === s.instanceId && c.clears);
+    const cleared = alibiClue && currentCase.foundClueIds.has(alibiClue.id);
+    const card = document.createElement('div');
+    card.className = 'suspect-card' + (cleared ? ' cleared' : '');
+    card.innerHTML = `<div class="portrait" style="background-image:url(${s.portraitURL})"></div>
+      <div class="s-name">${s.name}</div>
+      <div class="s-job">${s.jobTitle}</div>
+      <div class="s-status">${cleared ? '✓ מנוקה/ה מחשד' : '⚠ עדיין חשוד/ה'}</div>`;
+    list.appendChild(card);
+  });
+  const clueList = el('clueList');
+  clueList.innerHTML = currentCase.foundOrder.map(t => `<div class="clue-item">${t}</div>`).join('') ||
+    '<div class="clue-item">עדיין לא נאספו רמזים. המשיכו לחקור בשכונה.</div>';
+  el('accuseBtn').disabled = currentCase.foundClueIds.size < currentCase.clues.length;
+}
+function closeNotebook() { el('notebookScreen').classList.add('hidden'); }
+
+let selectedAccuseId = null;
+function openAccuse() {
+  closeNotebook();
+  selectedAccuseId = null;
+  el('accuseScreen').classList.remove('hidden');
+  const grid = el('accuseGrid');
+  grid.innerHTML = '';
+  currentCase.suspects.forEach(s => {
+    const card = document.createElement('div');
+    card.className = 'accuse-card';
+    card.dataset.id = s.instanceId;
+    card.innerHTML = `<div class="portrait" style="background-image:url(${s.portraitURL})"></div>
+      <div class="s-name">${s.name}</div><div class="s-job">${s.jobTitle}</div>`;
+    card.addEventListener('click', () => {
+      selectedAccuseId = s.instanceId;
+      [...grid.children].forEach(c => c.classList.toggle('selected', c === card));
+      el('confirmAccuseBtn').disabled = false;
+    });
+    grid.appendChild(card);
+  });
+  el('confirmAccuseBtn').disabled = true;
+}
+function closeAccuse() { el('accuseScreen').classList.add('hidden'); }
+
+function confirmAccuse() {
+  if (!selectedAccuseId) return;
+  const suspect = currentCase.suspects.find(s => s.instanceId === selectedAccuseId);
+  if (suspect.guilty) {
+    closeAccuse();
+    startBattleFlow(suspect);
+  } else {
+    currentCase.wrongAccusations++;
+    toast(`❌ טעות! ${suspect.name} חף/ה מפשע: ${suspect.alibiPlace}.`, 3200);
+  }
+}
+
+/* ============================== Battle ============================== */
+
+const battle = {
+  active: false, lanes: [60, 120, 180], playerLane: 1, playerX: 120,
+  hearts: 3, crookHp: 100, crookLane: 1, crookMoveTimer: 0,
+  projectiles: [], spawnTimer: 0, throwCd: 0, throws: [], crook: null, lastTs: 0
 };
 
-class Enemy {
-  constructor(x, y, type) {
-    const d = ENEMY_DEFS[type];
-    this.type = type;
-    this.x = x; this.y = y; this.r = d.r;
-    this.hp = d.hp; this.maxHp = d.hp;
-    this.speed = d.speed;
-    this.color = d.color;
-    this.contactDmg = d.contactDmg;
-    this.behavior = d.behavior;
-    this.def = d;
-    this.angle = 0;
-    this.hitFlash = 0;
-    this.dead = false;
-    this.state = 'seek';
-    this.stateTimer = rand(0.5, 1.5);
-    this.fireTimer = rand(0.3, d.fireRate || 1);
-    this.slamTelegraph = 0;
-    this.chargeVec = { x: 0, y: 0 };
-    this.knockX = 0; this.knockY = 0;
-    this.bossPattern = 0;
-    this.bossTimer = 2;
-  }
-
-  takeDamage(amount, game) {
-    this.hp -= amount;
-    this.hitFlash = 0.12;
-    burst(game, this.x, this.y, this.color, 5, 90, 0.25);
-    if (this.hp <= 0 && !this.dead) {
-      this.dead = true;
-      Audio_.explosion();
-      burst(game, this.x, this.y, this.color, this.type === 'boss' ? 60 : 18, this.type === 'boss' ? 320 : 180, 0.6);
-      game.shake = Math.min(20, game.shake + (this.type === 'boss' ? 16 : 5));
-      game.onEnemyKilled(this);
-    }
-  }
-
-  update(dt, game) {
-    const p = game.player;
-    const a = angleTo(this.x, this.y, p.x, p.y);
-    this.angle = a;
-    const d = dist(this.x, this.y, p.x, p.y);
-
-    if (this.behavior === 'charge') {
-      this.x += Math.cos(a) * this.speed * dt;
-      this.y += Math.sin(a) * this.speed * dt;
-    } else if (this.behavior === 'ranged') {
-      const desired = 260;
-      const dir = d < desired - 20 ? -1 : d > desired + 20 ? 1 : 0;
-      this.x += Math.cos(a) * dir * this.speed * dt;
-      this.y += Math.sin(a) * dir * this.speed * dt;
-      this.fireTimer -= dt;
-      if (this.fireTimer <= 0 && d < 520) {
-        this.fireTimer = this.def.fireRate * rand(0.85, 1.15);
-        game.bullets.push(new Bullet(this.x, this.y, a, this.def.bulletSpeed, this.def.bulletDmg, 'enemy', '#ff8f3d', 5));
-        Audio_.enemyShoot();
-      }
-    } else if (this.behavior === 'slam') {
-      if (this.slamTelegraph > 0) {
-        this.slamTelegraph -= dt;
-        if (this.slamTelegraph <= 0) {
-          if (d < this.def.slamRadius + this.r) {
-            p.takeDamage(this.def.slamDmg, game);
-          }
-          burst(game, this.x, this.y, '#c23bff', 24, 220, 0.4);
-          game.shake = Math.min(16, game.shake + 8);
-        }
-      } else if (d < this.def.slamRadius) {
-        this.slamTelegraph = this.def.slamCharge;
-      } else {
-        this.x += Math.cos(a) * this.speed * dt;
-        this.y += Math.sin(a) * this.speed * dt;
-      }
-    } else if (this.behavior === 'boss') {
-      this.bossTimer -= dt;
-      const desired = 300;
-      const dir = d < desired - 30 ? -1 : d > desired + 30 ? 1 : 0;
-      this.x += Math.cos(a) * dir * this.speed * 0.6 * dt;
-      this.y += Math.sin(a) * dir * this.speed * dt * 0.6;
-      if (this.bossTimer <= 0) {
-        this.bossTimer = rand(1.8, 2.6);
-        this.bossPattern = (this.bossPattern + 1) % 2;
-      }
-      this.fireTimer -= dt;
-      if (this.fireTimer <= 0) {
-        if (this.bossPattern === 0) {
-          this.fireTimer = this.def.fireRate;
-          game.bullets.push(new Bullet(this.x, this.y, a, this.def.bulletSpeed, this.def.bulletDmg, 'enemy', '#ff2d55', 6));
-          Audio_.enemyShoot();
-        } else {
-          this.fireTimer = this.def.fireRate * 2.2;
-          const n = 8;
-          for (let i = 0; i < n; i++) {
-            game.bullets.push(new Bullet(this.x, this.y, (TAU / n) * i, this.def.bulletSpeed * 0.8, this.def.bulletDmg, 'enemy', '#ff2d55', 6));
-          }
-          Audio_.enemyShoot();
-        }
-      }
-    }
-
-    // knockback integration
-    if (Math.abs(this.knockX) > 0.5 || Math.abs(this.knockY) > 0.5) {
-      this.x += this.knockX * dt;
-      this.y += this.knockY * dt;
-      this.knockX *= 0.85; this.knockY *= 0.85;
-    }
-
-    this.x = clamp(this.x, this.r, game.W - this.r);
-    this.y = clamp(this.y, this.r, game.H - this.r);
-    for (const o of game.obstacles) resolveCircleRect(this, o.x, o.y, o.w, o.h);
-
-    // contact damage with player
-    if (d < this.r + p.r) {
-      p.takeDamage(this.contactDmg * dt * 3, game);
-      const push = (this.r + p.r) - d || 1;
-      const nx = (this.x - p.x) / (d || 1), ny = (this.y - p.y) / (d || 1);
-      this.x += nx * push * 0.5;
-      this.y += ny * push * 0.5;
-    }
-
-    this.hitFlash = Math.max(0, this.hitFlash - dt);
-  }
-
-  draw(ctx) {
-    ctx.save();
-    ctx.translate(this.x, this.y);
-
-    if (this.behavior === 'slam' && this.slamTelegraph > 0) {
-      const t = 1 - this.slamTelegraph / this.def.slamCharge;
-      ctx.strokeStyle = `rgba(194,59,255,${0.8 - t * 0.4})`;
-      ctx.lineWidth = 3;
-      ctx.beginPath();
-      ctx.arc(0, 0, this.def.slamRadius * t, 0, TAU);
-      ctx.stroke();
-    }
-
-    ctx.rotate(this.angle);
-    const flash = this.hitFlash > 0;
-    ctx.fillStyle = flash ? '#ffffff' : '#1a0f10';
-    ctx.strokeStyle = flash ? '#ffffff' : this.color;
-    ctx.lineWidth = 2.5;
-
-    if (this.type === 'scout') {
-      ctx.beginPath();
-      ctx.moveTo(this.r, 0);
-      ctx.lineTo(-this.r * 0.8, this.r * 0.75);
-      ctx.lineTo(-this.r * 0.4, 0);
-      ctx.lineTo(-this.r * 0.8, -this.r * 0.75);
-      ctx.closePath();
-      ctx.fill(); ctx.stroke();
-    } else if (this.type === 'gunner') {
-      ctx.beginPath();
-      ctx.rect(-this.r * 0.8, -this.r * 0.8, this.r * 1.6, this.r * 1.6);
-      ctx.fill(); ctx.stroke();
-      ctx.fillStyle = flash ? '#fff' : this.color;
-      ctx.fillRect(0, -2.5, this.r * 1.1, 5);
-    } else if (this.type === 'heavy') {
-      ctx.beginPath();
-      for (let i = 0; i < 6; i++) {
-        const a = (TAU / 6) * i;
-        const px = Math.cos(a) * this.r, py = Math.sin(a) * this.r;
-        if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
-      }
-      ctx.closePath();
-      ctx.fill(); ctx.stroke();
-    } else if (this.type === 'boss') {
-      ctx.beginPath();
-      for (let i = 0; i < 8; i++) {
-        const a = (TAU / 8) * i;
-        const rr = i % 2 === 0 ? this.r : this.r * 0.7;
-        const px = Math.cos(a) * rr, py = Math.sin(a) * rr;
-        if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
-      }
-      ctx.closePath();
-      ctx.fill(); ctx.stroke();
-      ctx.fillStyle = flash ? '#fff' : this.color;
-      ctx.fillRect(0, -4, this.r * 1.2, 8);
-    }
-
-    ctx.fillStyle = flash ? '#fff' : this.color;
-    ctx.beginPath();
-    ctx.arc(0, 0, this.r * 0.25, 0, TAU);
-    ctx.fill();
-
-    ctx.restore();
-
-    // health bar
-    if (this.hp < this.maxHp) {
-      const w = this.r * 2;
-      const t = clamp(this.hp / this.maxHp, 0, 1);
-      ctx.fillStyle = 'rgba(0,0,0,0.5)';
-      ctx.fillRect(this.x - w / 2, this.y - this.r - 12, w, 5);
-      ctx.fillStyle = t > 0.5 ? '#4fe07d' : t > 0.25 ? '#ffd447' : '#ff5b4d';
-      ctx.fillRect(this.x - w / 2, this.y - this.r - 12, w * t, 5);
-    }
-  }
+function startBattleFlow(guiltySuspect) {
+  el('battleIntroTitle').textContent = 'תפסתם את הגנב/ת!';
+  el('battleIntroText').innerHTML = `${guiltySuspect.name} מבין/ה שנתפס/ה ונמלט/ת עם ${currentCase.stolenItem} לסמטה האחורית. נחמן, זה הרגע — תעצרו אותו/ה!`;
+  el('battleIntroScreen').classList.remove('hidden');
+  battle.crook = guiltySuspect;
 }
 
-// ---------- game ----------
-class Game {
-  constructor(canvas) {
-    this.canvas = canvas;
-    this.ctx = canvas.getContext('2d');
-    this.W = canvas.width;
-    this.H = canvas.height;
-    this.state = 'start'; // start | playing | paused | gameover
-    this.reset();
-    this.lastTime = performance.now();
-    Input.init(canvas);
-    this.bindUI();
-    requestAnimationFrame(this.loop.bind(this));
-  }
-
-  reset() {
-    this.player = new Player(this.W / 2, this.H / 2);
-    this.bullets = [];
-    this.enemies = [];
-    this.particles = [];
-    this.powerups = [];
-    this.obstacles = this.makeObstacles();
-    this.score = 0;
-    this.wave = 0;
-    this.shake = 0;
-    this.spawnQueue = [];
-    this.spawnTimer = 0;
-    this.waveActive = false;
-    this.waveBannerTimer = 0;
-  }
-
-  makeObstacles() {
-    const list = [];
-    const margin = 120;
-    const spots = [
-      [this.W * 0.25, this.H * 0.3], [this.W * 0.75, this.H * 0.3],
-      [this.W * 0.25, this.H * 0.7], [this.W * 0.75, this.H * 0.7],
-      [this.W * 0.5, this.H * 0.5],
-    ];
-    for (const [sx, sy] of spots) {
-      const w = rand(50, 90), h = rand(50, 90);
-      list.push(new Obstacle(sx - w / 2, sy - h / 2, w, h));
-    }
-    return list.filter(o => dist(o.x + o.w / 2, o.y + o.h / 2, this.W / 2, this.H / 2) > 60);
-  }
-
-  bindUI() {
-    document.getElementById('startBtn').onclick = () => this.startGame();
-    document.getElementById('restartBtn').onclick = () => this.startGame();
-    document.getElementById('resumeBtn').onclick = () => this.togglePause(false);
-    window.addEventListener('keydown', e => {
-      if (e.code === 'KeyP' || e.code === 'Escape') {
-        if (this.state === 'playing') this.togglePause(true);
-        else if (this.state === 'paused') this.togglePause(false);
-      }
-      if (e.code === 'Enter') {
-        if (this.state === 'start' || this.state === 'gameover') this.startGame();
-      }
-    });
-  }
-
-  togglePause(pause) {
-    if (pause) { this.state = 'paused'; document.getElementById('pauseScreen').classList.remove('hidden'); }
-    else { this.state = 'playing'; document.getElementById('pauseScreen').classList.add('hidden'); }
-  }
-
-  startGame() {
-    this.reset();
-    this.state = 'playing';
-    document.getElementById('startScreen').classList.add('hidden');
-    document.getElementById('gameOverScreen').classList.add('hidden');
-    document.getElementById('hud').classList.remove('hidden');
-    document.getElementById('highscore').textContent = localStorage.getItem('rs_highscore') || 0;
-    this.nextWave();
-  }
-
-  nextWave() {
-    this.wave++;
-    document.getElementById('wave').textContent = this.wave;
-    const banner = document.getElementById('waveBanner');
-    banner.textContent = `גל ${this.wave}`;
-    banner.classList.remove('hidden');
-    void banner.offsetWidth;
-    banner.classList.remove('hidden');
-    clearTimeout(this._bannerTO);
-    this._bannerTO = setTimeout(() => banner.classList.add('hidden'), 1500);
-
-    const list = [];
-    const n = 3 + this.wave * 2;
-    for (let i = 0; i < n; i++) {
-      let type = 'scout';
-      const roll = Math.random();
-      if (this.wave >= 2 && roll < 0.3) type = 'gunner';
-      if (this.wave >= 3 && roll < 0.15) type = 'heavy';
-      list.push(type);
-    }
-    if (this.wave % 5 === 0) list.push('boss');
-    this.shuffle(list);
-    this.spawnQueue = list;
-    this.spawnTimer = 0.6;
-    this.waveActive = true;
-  }
-
-  shuffle(arr) {
-    for (let i = arr.length - 1; i > 0; i--) {
-      const j = (Math.random() * (i + 1)) | 0;
-      [arr[i], arr[j]] = [arr[j], arr[i]];
-    }
-  }
-
-  spawnPos() {
-    const side = (Math.random() * 4) | 0;
-    const pad = 30;
-    if (side === 0) return { x: rand(pad, this.W - pad), y: pad };
-    if (side === 1) return { x: this.W - pad, y: rand(pad, this.H - pad) };
-    if (side === 2) return { x: rand(pad, this.W - pad), y: this.H - pad };
-    return { x: pad, y: rand(pad, this.H - pad) };
-  }
-
-  onEnemyKilled(enemy) {
-    this.score += enemy.def.score;
-    document.getElementById('score').textContent = this.score;
-    if (Math.random() < 0.18) {
-      const type = pick(['health', 'overdrive', 'shield']);
-      this.powerups.push(new PowerUp(enemy.x, enemy.y, type));
-    }
-  }
-
-  update(dt) {
-    if (this.state !== 'playing') return;
-
-    this.player.update(dt, this);
-    if (!this.player.alive) { this.onGameOver(); return; }
-
-    // spawn queue
-    if (this.spawnQueue.length > 0) {
-      this.spawnTimer -= dt;
-      if (this.spawnTimer <= 0) {
-        this.spawnTimer = 0.55;
-        const type = this.spawnQueue.shift();
-        const pos = this.spawnPos();
-        this.enemies.push(new Enemy(pos.x, pos.y, type));
-      }
-    } else if (this.waveActive && this.enemies.length === 0) {
-      this.waveActive = false;
-      this.score += 50 * this.wave;
-      document.getElementById('score').textContent = this.score;
-      setTimeout(() => { if (this.state === 'playing') this.nextWave(); }, 1400);
-    }
-
-    for (const e of this.enemies) e.update(dt, this);
-    this.enemies = this.enemies.filter(e => !e.dead);
-
-    for (const b of this.bullets) b.update(dt, this);
-
-    // bullet collisions
-    for (const b of this.bullets) {
-      if (b.dead) continue;
-      if (b.owner === 'player') {
-        for (const e of this.enemies) {
-          if (e.dead) continue;
-          if (dist(b.x, b.y, e.x, e.y) < b.r + e.r) {
-            e.takeDamage(b.dmg, this);
-            const knock = 90;
-            e.knockX += Math.cos(Math.atan2(e.y - b.y, e.x - b.x)) * knock;
-            e.knockY += Math.sin(Math.atan2(e.y - b.y, e.x - b.x)) * knock;
-            b.dead = true;
-            break;
-          }
-        }
-      } else if (b.owner === 'enemy') {
-        const p = this.player;
-        if (dist(b.x, b.y, p.x, p.y) < b.r + p.r) {
-          p.takeDamage(b.dmg, this);
-          b.dead = true;
-        }
-      }
-    }
-    this.bullets = this.bullets.filter(b => !b.dead);
-
-    for (const pu of this.powerups) pu.update(dt);
-    for (const pu of this.powerups) {
-      if (pu.dead) continue;
-      if (dist(pu.x, pu.y, this.player.x, this.player.y) < pu.r + this.player.r) {
-        this.applyPowerup(pu.type);
-        pu.dead = true;
-      }
-    }
-    this.powerups = this.powerups.filter(p => !p.dead);
-
-    for (const pt of this.particles) pt.update(dt);
-    this.particles = this.particles.filter(p => p.life > 0);
-
-    this.shake = Math.max(0, this.shake - dt * 40);
-
-    this.updateHUD();
-  }
-
-  applyPowerup(type) {
-    Audio_.powerup();
-    if (type === 'health') this.player.health = Math.min(this.player.maxHealth, this.player.health + 34);
-    if (type === 'overdrive') this.player.overdriveTimer = 6;
-    if (type === 'shield') this.player.shieldTimer = 5;
-    burst(this, this.player.x, this.player.y, POWERUP_TYPES[type].color, 16, 150, 0.4);
-  }
-
-  updateHUD() {
-    document.getElementById('healthFill').style.width = clamp(this.player.health / this.player.maxHealth, 0, 1) * 100 + '%';
-    document.getElementById('heatFill').style.width = clamp(this.player.heat / this.player.maxHeat, 0, 1) * 100 + '%';
-    const dashPct = 1 - clamp(this.player.dashTimer / this.player.dashCooldown, 0, 1);
-    document.getElementById('dashFill').style.width = dashPct * 100 + '%';
-    document.getElementById('overheatWarning').classList.toggle('hidden', !this.player.overheated);
-  }
-
-  onGameOver() {
-    this.state = 'gameover';
-    Audio_.gameOver();
-    const hs = Math.max(this.score, Number(localStorage.getItem('rs_highscore') || 0));
-    localStorage.setItem('rs_highscore', hs);
-    document.getElementById('finalStats').textContent = `ניקוד: ${this.score}   |   גל: ${this.wave}   |   שיא: ${hs}`;
-    document.getElementById('gameOverScreen').classList.remove('hidden');
-    document.getElementById('hud').classList.add('hidden');
-  }
-
-  draw() {
-    const ctx = this.ctx;
-    ctx.save();
-    ctx.clearRect(0, 0, this.W, this.H);
-
-    if (this.shake > 0.1) {
-      ctx.translate(rand(-this.shake, this.shake), rand(-this.shake, this.shake));
-    }
-
-    // background grid
-    ctx.fillStyle = '#070b0f';
-    ctx.fillRect(-30, -30, this.W + 60, this.H + 60);
-    ctx.strokeStyle = 'rgba(79,243,255,0.06)';
-    ctx.lineWidth = 1;
-    const grid = 40;
-    for (let x = 0; x <= this.W; x += grid) {
-      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, this.H); ctx.stroke();
-    }
-    for (let y = 0; y <= this.H; y += grid) {
-      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(this.W, y); ctx.stroke();
-    }
-    ctx.strokeStyle = 'rgba(79,243,255,0.35)';
-    ctx.lineWidth = 3;
-    ctx.strokeRect(2, 2, this.W - 4, this.H - 4);
-
-    for (const o of this.obstacles) o.draw(ctx);
-    for (const pu of this.powerups) pu.draw(ctx);
-    for (const pt of this.particles) pt.draw(ctx);
-    for (const e of this.enemies) e.draw(ctx);
-    for (const b of this.bullets) b.draw(ctx);
-    if (this.player.alive) this.player.draw(ctx);
-
-    ctx.restore();
-  }
-
-  loop(now) {
-    const dt = Math.min(0.033, (now - this.lastTime) / 1000);
-    this.lastTime = now;
-    this.update(dt);
-    this.draw();
-    requestAnimationFrame(this.loop.bind(this));
-  }
+function resetBattleRound() {
+  battle.hearts = 3;
+  battle.crookHp = 100;
+  battle.playerLane = 1;
+  battle.playerX = battle.lanes[1];
+  battle.crookLane = 1;
+  battle.crookMoveTimer = 0;
+  battle.projectiles = [];
+  battle.throws = [];
+  battle.spawnTimer = 1;
+  battle.throwCd = 0;
 }
 
-window.addEventListener('DOMContentLoaded', () => {
-  const canvas = document.getElementById('game');
-  new Game(canvas);
+function beginBattle() {
+  el('battleIntroScreen').classList.add('hidden');
+  hotspotsEl.innerHTML = '';
+  closeDialogue();
+  resetBattleRound();
+  battle.active = true;
+  state = 'battle';
+  topbar.classList.add('hidden');
+  navbar.classList.add('hidden');
+  el('battleHud').classList.remove('hidden');
+  el('battleControls').classList.remove('hidden');
+  el('crookName').textContent = `${battle.crook.name} בורח/ת!`;
+  renderHearts();
+  renderCrookBar();
+  battle.lastTs = performance.now();
+}
+
+function renderHearts() { el('playerHearts').textContent = '❤️'.repeat(Math.max(0, battle.hearts)) + '🖤'.repeat(3 - Math.max(0, battle.hearts)); }
+function renderCrookBar() { el('crookFill').style.width = Math.max(0, battle.crookHp) + '%'; }
+
+function battleMove(dir) {
+  if (!battle.active) return;
+  battle.playerLane = Math.max(0, Math.min(2, battle.playerLane + dir));
+}
+function battleThrow() {
+  if (!battle.active || battle.throwCd > 0) return;
+  battle.throwCd = 0.55;
+  battle.throws.push({ x: battle.playerX, y: 140, lane: battle.playerLane });
+}
+
+function updateBattle(dt) {
+  const targetX = battle.lanes[battle.playerLane];
+  battle.playerX += (targetX - battle.playerX) * Math.min(1, dt * 10);
+  if (battle.throwCd > 0) battle.throwCd -= dt;
+
+  battle.crookMoveTimer -= dt;
+  if (battle.crookMoveTimer <= 0) {
+    battle.crookMoveTimer = 1.1 + Math.random() * 0.8;
+    battle.crookLane = randInt(0, 2);
+  }
+
+  battle.spawnTimer -= dt;
+  if (battle.spawnTimer <= 0) {
+    battle.spawnTimer = 1.0 + Math.random() * 0.7;
+    battle.projectiles.push({ x: battle.lanes[randInt(0, 2)], y: 32 });
+  }
+  battle.projectiles.forEach(p => { p.y += dt * 95; });
+  battle.projectiles = battle.projectiles.filter(p => {
+    if (p.y >= 132 && p.y < 145 && Math.abs(p.x - battle.playerX) < 14) {
+      battle.hearts--;
+      renderHearts();
+      if (battle.hearts <= 0) loseBattleRound();
+      return false;
+    }
+    return p.y < 150;
+  });
+
+  battle.throws.forEach(t => { t.y -= dt * 130; });
+  battle.throws = battle.throws.filter(t => {
+    if (t.y <= 44 && t.y > 20 && t.lane === battle.crookLane) {
+      battle.crookHp -= 20;
+      renderCrookBar();
+      if (battle.crookHp <= 0) winBattle();
+      return false;
+    }
+    return t.y > 20;
+  });
+}
+
+function drawBattle() {
+  bgAlley();
+  const crookX = battle.lanes[battle.crookLane];
+  drawPerson(crookX, 58, battle.crook.portraitSpec, 0.5);
+  battle.projectiles.forEach(p => R(p.x - 3, p.y - 3, 6, 6, '#8a5a3a'));
+  battle.throws.forEach(t => R(t.x - 3, t.y - 3, 6, 6, '#e8dcb0'));
+  drawNachmanFedora(battle.playerX, 148, 0.85);
+}
+
+function loseBattleRound() {
+  battle.active = false;
+  el('battleIntroTitle').textContent = 'הוא/היא כמעט ברח/ה!';
+  el('battleIntroText').textContent = `נחמן, תתאושש! ${battle.crook.name} כמעט חמק/ה, אבל עוד לא נגמר. נסו שוב לתפוס אותו/ה.`;
+  el('battleIntroScreen').classList.remove('hidden');
+}
+
+function winBattle() {
+  battle.active = false;
+  state = 'caseClosed';
+  el('battleHud').classList.add('hidden');
+  el('battleControls').classList.add('hidden');
+  casesSolvedTotal++;
+  localStorage.setItem('nachman_cases_solved', String(casesSolvedTotal));
+  el('closedTitle').textContent = 'התיק נסגר!';
+  el('closedSubtitle').textContent = `תיק #${currentCase.id} נפתר בהצלחה`;
+  el('closedSummary').innerHTML =
+    `תפסתם את <b>${battle.crook.name}</b>, ו<b>${currentCase.stolenItem}</b> חוזר/ת בשלום אל ${currentCase.ownerLabel}.<br><br>` +
+    `רמזים שנאספו: ${currentCase.foundClueIds.size}/${currentCase.clues.length}<br>` +
+    `האשמות שגויות בדרך: ${currentCase.wrongAccusations}<br>` +
+    `סה"כ תיקים שנפתרו על ידי בלש נחמן: ${casesSolvedTotal}`;
+  el('caseClosedScreen').classList.remove('hidden');
+}
+
+let rafId = null;
+function loop(ts) {
+  rafId = requestAnimationFrame(loop);
+  if (state === 'battle' && battle.active) {
+    const dt = Math.min(0.05, (ts - battle.lastTs) / 1000);
+    battle.lastTs = ts;
+    updateBattle(dt);
+    drawBattle();
+  }
+}
+requestAnimationFrame(loop);
+
+/* ============================== Flow control ============================== */
+
+function startNewCase() {
+  currentCase = generateCase();
+  showCaseIntro();
+}
+
+function showCaseIntro() {
+  state = 'caseIntro';
+  el('introTitle').textContent = `תיק #${currentCase.id}: תעלומת ${currentCase.stolenItem}`;
+  el('introSubtitle').textContent = `${currentCase.ownerLabel} דיווח/ה על גניבה ${currentCase.crimeLocLabel}`;
+  el('introBrief').innerHTML = introBrief(currentCase);
+  el('caseIntroScreen').classList.remove('hidden');
+}
+
+function beginInvestigation() {
+  el('caseIntroScreen').classList.add('hidden');
+  state = 'investigate';
+  topbar.classList.remove('hidden');
+  navbar.classList.remove('hidden');
+  updateTopbar();
+  buildNavbar();
+  goToLocation('office');
+}
+
+/* ============================== Wiring ============================== */
+
+el('startBtn').addEventListener('click', () => { el('startScreen').classList.add('hidden'); startNewCase(); });
+el('beginInvestigationBtn').addEventListener('click', beginInvestigation);
+el('notebookBtn').addEventListener('click', openNotebook);
+el('closeNotebookBtn').addEventListener('click', closeNotebook);
+el('accuseBtn').addEventListener('click', openAccuse);
+el('cancelAccuseBtn').addEventListener('click', closeAccuse);
+el('confirmAccuseBtn').addEventListener('click', confirmAccuse);
+el('dlgClose').addEventListener('click', closeDialogue);
+el('startBattleBtn').addEventListener('click', beginBattle);
+el('newCaseBtn').addEventListener('click', () => { el('caseClosedScreen').classList.add('hidden'); startNewCase(); });
+
+el('btnLeft').addEventListener('click', () => battleMove(-1));
+el('btnRight').addEventListener('click', () => battleMove(1));
+el('btnThrow').addEventListener('click', battleThrow);
+
+window.addEventListener('keydown', e => {
+  if (state !== 'battle') return;
+  if (e.key === 'a' || e.key === 'A' || e.key === 'ArrowLeft') battleMove(-1);
+  if (e.key === 'd' || e.key === 'D' || e.key === 'ArrowRight') battleMove(1);
+  if (e.key === ' ') { e.preventDefault(); battleThrow(); }
 });
+
+renderHearts();
+renderCrookBar();
