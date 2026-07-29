@@ -14,6 +14,13 @@ function shuffle(arr) {
 }
 function firstName(fullName) { return fullName.split(' ')[0]; }
 
+function safeLocalGet(key, fallback) {
+  try { return localStorage.getItem(key) ?? fallback; } catch (e) { return fallback; }
+}
+function safeLocalSet(key, val) {
+  try { localStorage.setItem(key, val); } catch (e) { /* storage unavailable, ignore */ }
+}
+
 /* ============================== Content data ============================== */
 
 const LAST_NAMES = ['כהן', 'לוי', 'גרין', 'רוזנברג', 'שוורץ', 'פרידמן', 'וייס', 'קפלן', 'אשכולי', 'ברקוביץ'];
@@ -118,8 +125,8 @@ const LOC_LABELS = { office: 'המשרד של נחמן', crimescene: 'זירת �
 
 /* ============================== Case generation ============================== */
 
-let caseCounter = parseInt(localStorage.getItem('nachman_case_counter') || '0', 10);
-let casesSolvedTotal = parseInt(localStorage.getItem('nachman_cases_solved') || '0', 10);
+let caseCounter = parseInt(safeLocalGet('nachman_case_counter', '0'), 10);
+let casesSolvedTotal = parseInt(safeLocalGet('nachman_cases_solved', '0'), 10);
 
 function buildSuspectInstance(archetype, idx) {
   const first = archetype.gender === 'f' ? pick(FIRST_F) : pick(FIRST_M);
@@ -148,7 +155,7 @@ function buildSuspectInstance(archetype, idx) {
 
 function generateCase() {
   caseCounter++;
-  localStorage.setItem('nachman_case_counter', String(caseCounter));
+  safeLocalSet('nachman_case_counter', String(caseCounter));
 
   const template = pick(CASE_TEMPLATES);
   const method = pick(METHODS);
@@ -739,7 +746,7 @@ function winBattle() {
   el('battleHud').classList.add('hidden');
   el('battleControls').classList.add('hidden');
   casesSolvedTotal++;
-  localStorage.setItem('nachman_cases_solved', String(casesSolvedTotal));
+  safeLocalSet('nachman_cases_solved', String(casesSolvedTotal));
   el('closedTitle').textContent = 'התיק נסגר!';
   el('closedSubtitle').textContent = `תיק #${currentCase.id} נפתר בהצלחה`;
   el('closedSummary').innerHTML =
