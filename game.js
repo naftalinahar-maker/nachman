@@ -80,6 +80,9 @@ const Audio_ = {
     } catch (e) { /* audio not available */ }
   },
   shoot() { this.tone(rand(760, 840), 0.08, 'sawtooth', 0.06, 220); },
+  missile() { this.tone(260, 0.25, 'triangle', 0.1, 520); this.noise(0.15, 0.06); },
+  slash() { this.noise(0.1, 0.1); this.tone(520, 0.1, 'square', 0.06, 180); },
+  shockwave() { this.tone(70, 0.5, 'sine', 0.25, 30); this.noise(0.4, 0.18); },
   enemyShoot() { this.tone(rand(300, 360), 0.1, 'square', 0.05, 120); },
   hit() { this.noise(0.08, 0.12); },
   explosion() { this.noise(0.35, 0.28); this.tone(90, 0.3, 'sine', 0.15, 30); },
@@ -91,25 +94,28 @@ const Audio_ = {
 };
 
 // ---------- input ----------
+// Keyboard-only: arrows move, one key per attack. On-screen attack buttons
+// feed the same codes through `virtual` so touch/mouse users can play too.
 const Input = {
   keys: new Set(),
-  mouse: { x: 0, y: 0, down: false },
-  init(canvas) {
+  virtual: new Set(),
+  init() {
     window.addEventListener('keydown', e => {
       this.keys.add(e.code);
       if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space'].includes(e.code)) e.preventDefault();
     });
     window.addEventListener('keyup', e => this.keys.delete(e.code));
-    canvas.addEventListener('mousemove', e => {
-      const r = canvas.getBoundingClientRect();
-      this.mouse.x = (e.clientX - r.left) * (canvas.width / r.width);
-      this.mouse.y = (e.clientY - r.top) * (canvas.height / r.height);
-    });
-    canvas.addEventListener('mousedown', () => this.mouse.down = true);
-    window.addEventListener('mouseup', () => this.mouse.down = false);
-    canvas.addEventListener('contextmenu', e => e.preventDefault());
+    window.addEventListener('blur', () => { this.keys.clear(); this.virtual.clear(); });
+    for (const btn of document.querySelectorAll('[data-code]')) {
+      const code = btn.dataset.code;
+      const release = () => this.virtual.delete(code);
+      btn.addEventListener('pointerdown', e => { e.preventDefault(); this.virtual.add(code); });
+      btn.addEventListener('pointerup', release);
+      btn.addEventListener('pointerleave', release);
+      btn.addEventListener('pointercancel', release);
+    }
   },
-  down(code) { return this.keys.has(code); },
+  down(code) { return this.keys.has(code) || this.virtual.has(code); },
 };
 
 // ---------- particles ----------
@@ -189,6 +195,81 @@ class Bullet {
   }
 }
 
+// homing rocket: steers toward the nearest enemy and explodes on impact
+class Missile extends Bullet {
+  constructor(x, y, angle) {
+    super(x, y, angle, 360, 40, 'player', '#ffd447', 6);
+    this.angle = angle;
+    this.blast = 75;
+    this.turnRate = 4.2;
+    this.life = 2.6;
+  }
+  update(dt, game) {
+    let target = null, best = Infinity;
+    for (const e of game.enemies) {
+      const d = dist(this.x, this.y, e.x, e.y);
+      if (!e.dead && d < best) { best = d; target = e; }
+    }
+    if (target) {
+      let diff = angleTo(this.x, this.y, target.x, target.y) - this.angle;
+      diff = Math.atan2(Math.sin(diff), Math.cos(diff));
+      this.angle += clamp(diff, -this.turnRate * dt, this.turnRate * dt);
+    }
+    const speed = Math.hypot(this.vx, this.vy) + 260 * dt;
+    this.vx = Math.cos(this.angle) * speed;
+    this.vy = Math.sin(this.angle) * speed;
+    game.particles.push(new Particle(this.x, this.y, rand(-20, 20), rand(-20, 20), 0.35, '#8a8f99', rand(2, 4)));
+    super.update(dt, game);
+    this.life -= dt;
+    if (this.life <= 0) this.dead = true;
+    if (this.dead) this.explode(game);
+  }
+  explode(game) {
+    if (this.exploded) return;
+    this.exploded = true;
+    this.dead = true;
+    for (const e of game.enemies) {
+      if (e.dead) continue;
+      const d = dist(this.x, this.y, e.x, e.y);
+      if (d < this.blast + e.r) {
+        e.takeDamage(this.dmg * (d < e.r + this.r ? 1 : 0.6), game);
+        const a = angleTo(this.x, this.y, e.x, e.y);
+        e.knockX += Math.cos(a) * 260;
+        e.knockY += Math.sin(a) * 260;
+      }
+    }
+    Audio_.explosion();
+    burst(game, this.x, this.y, '#ffd447', 22, 240, 0.5);
+    game.effects.push({ kind: 'ring', x: this.x, y: this.y, r0: 10, r1: this.blast, life: 0.3, maxLife: 0.3, color: '255,212,71' });
+    game.shake = Math.min(18, game.shake + 6);
+  }
+  draw(ctx) {
+    ctx.save();
+    ctx.translate(this.x, this.y);
+    ctx.rotate(this.angle);
+    ctx.fillStyle = '#ffd447';
+    ctx.shadowColor = '#ffd447';
+    ctx.shadowBlur = 10;
+    ctx.beginPath();
+    ctx.moveTo(10, 0);
+    ctx.lineTo(-6, 5);
+    ctx.lineTo(-6, -5);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = '#ff8f3d';
+    ctx.fillRect(-10, -2, 4, 4);
+    ctx.restore();
+  }
+}
+
+// one entry per attack: key, cooldown (seconds), HUD element id
+const ATTACKS = {
+  laser:   { code: 'KeyZ' },
+  missile: { code: 'KeyX', cooldown: 1.1 },
+  melee:   { code: 'KeyC', cooldown: 0.55 },
+  shock:   { code: 'KeyV', cooldown: 7 },
+};
+
 // ---------- power-ups ----------
 const POWERUP_TYPES = {
   health: { color: '#4fe07d', symbol: '+' },
@@ -258,6 +339,7 @@ class Player {
     this.dashCooldown = 1.4; this.dashTimer = 0;
     this.dashDuration = 0.18; this.dashing = 0;
     this.dashSpeed = 720;
+    this.cooldowns = { missile: 0, melee: 0, shock: 0 };
     this.invuln = 0;
     this.hitFlash = 0;
     this.overdriveTimer = 0;
@@ -271,10 +353,10 @@ class Player {
   update(dt, game) {
     // movement
     let mx = 0, my = 0;
-    if (Input.down('KeyW') || Input.down('ArrowUp')) my -= 1;
-    if (Input.down('KeyS') || Input.down('ArrowDown')) my += 1;
-    if (Input.down('KeyA') || Input.down('ArrowLeft')) mx -= 1;
-    if (Input.down('KeyD') || Input.down('ArrowRight')) mx += 1;
+    if (Input.down('ArrowUp')) my -= 1;
+    if (Input.down('ArrowDown')) my += 1;
+    if (Input.down('ArrowLeft')) mx -= 1;
+    if (Input.down('ArrowRight')) mx += 1;
     const mlen = Math.hypot(mx, my);
     if (mlen > 0) { mx /= mlen; my /= mlen; }
 
@@ -304,8 +386,13 @@ class Player {
     this.y = clamp(this.y, this.r, game.H - this.r);
     for (const o of game.obstacles) resolveCircleRect(this, o.x, o.y, o.w, o.h);
 
-    // aim
-    this.angle = angleTo(this.x, this.y, Input.mouse.x, Input.mouse.y);
+    // facing follows movement; attacks get a gentle aim-assist inside a cone
+    if (mlen > 0 && this.dashing <= 0) {
+      let diff = Math.atan2(my, mx) - this.angle;
+      diff = Math.atan2(Math.sin(diff), Math.cos(diff));
+      this.angle += clamp(diff, -12 * dt, 12 * dt);
+    }
+    const aim = this.aimAngle(game);
 
     // heat
     if (this.overheated) {
@@ -318,7 +405,7 @@ class Player {
     // firing
     this.fireTimer -= dt;
     this._firing = false;
-    if ((Input.mouse.down || Input.down('Space')) && !this.overheated) {
+    if (Input.down(ATTACKS.laser.code) && !this.overheated) {
       if (this.fireTimer <= 0) {
         this.fireTimer = this.effectiveFireRate;
         this._firing = true;
@@ -326,19 +413,98 @@ class Player {
         if (this.heat >= this.maxHeat) { this.overheated = true; Audio_.overheat(); }
         const spread = rand(-0.03, 0.03);
         game.bullets.push(new Bullet(
-          this.x + Math.cos(this.angle) * 22,
-          this.y + Math.sin(this.angle) * 22,
-          this.angle + spread, 620, 12 + (this.overdriveTimer > 0 ? 3 : 0), 'player', '#4ff3ff', 4
+          this.x + Math.cos(aim) * 22,
+          this.y + Math.sin(aim) * 22,
+          aim + spread, 620, 12 + (this.overdriveTimer > 0 ? 3 : 0), 'player', '#4ff3ff', 4
         ));
         Audio_.shoot();
-        burst(game, this.x + Math.cos(this.angle) * 22, this.y + Math.sin(this.angle) * 22, '#bff9ff', 3, 80, 0.15);
+        burst(game, this.x + Math.cos(aim) * 22, this.y + Math.sin(aim) * 22, '#bff9ff', 3, 80, 0.15);
       }
+    }
+
+    for (const k in this.cooldowns) this.cooldowns[k] = Math.max(0, this.cooldowns[k] - dt);
+
+    if (Input.down(ATTACKS.missile.code) && this.cooldowns.missile <= 0) {
+      this.cooldowns.missile = ATTACKS.missile.cooldown;
+      game.bullets.push(new Missile(this.x + Math.cos(aim) * 22, this.y + Math.sin(aim) * 22, aim));
+      Audio_.missile();
+    }
+
+    if (Input.down(ATTACKS.melee.code) && this.cooldowns.melee <= 0) {
+      this.cooldowns.melee = ATTACKS.melee.cooldown;
+      this.meleeAttack(game);
+    }
+
+    if (Input.down(ATTACKS.shock.code) && this.cooldowns.shock <= 0) {
+      this.cooldowns.shock = ATTACKS.shock.cooldown;
+      this.shockwave(game);
     }
 
     this.invuln = Math.max(0, this.invuln - dt);
     this.hitFlash = Math.max(0, this.hitFlash - dt);
     this.overdriveTimer = Math.max(0, this.overdriveTimer - dt);
     this.shieldTimer = Math.max(0, this.shieldTimer - dt);
+  }
+
+  // snap toward the closest enemy within ~35° of facing, else shoot straight ahead
+  aimAngle(game) {
+    let best = null, bestD = Infinity;
+    for (const e of game.enemies) {
+      if (e.dead) continue;
+      const a = angleTo(this.x, this.y, e.x, e.y);
+      let diff = a - this.angle;
+      diff = Math.atan2(Math.sin(diff), Math.cos(diff));
+      const d = dist(this.x, this.y, e.x, e.y);
+      if (Math.abs(diff) < 0.6 && d < 600 && d < bestD) { bestD = d; best = a; }
+    }
+    return best ?? this.angle;
+  }
+
+  // plasma blade: wide arc in front of the robot, heavy damage and knockback
+  meleeAttack(game) {
+    const range = this.r + 58, halfArc = 1.15;
+    for (const e of game.enemies) {
+      if (e.dead) continue;
+      const d = dist(this.x, this.y, e.x, e.y);
+      if (d > range + e.r) continue;
+      let diff = angleTo(this.x, this.y, e.x, e.y) - this.angle;
+      diff = Math.atan2(Math.sin(diff), Math.cos(diff));
+      if (Math.abs(diff) > halfArc && d > this.r + e.r) continue;
+      e.takeDamage(32 + (this.overdriveTimer > 0 ? 10 : 0), game);
+      const a = angleTo(this.x, this.y, e.x, e.y);
+      e.knockX += Math.cos(a) * 520;
+      e.knockY += Math.sin(a) * 520;
+    }
+    // the blade also cuts enemy bullets out of the air
+    for (const b of game.bullets) {
+      if (b.owner !== 'enemy') continue;
+      let diff = angleTo(this.x, this.y, b.x, b.y) - this.angle;
+      diff = Math.atan2(Math.sin(diff), Math.cos(diff));
+      if (dist(this.x, this.y, b.x, b.y) < range && Math.abs(diff) < halfArc) b.dead = true;
+    }
+    game.effects.push({ kind: 'slash', x: this.x, y: this.y, angle: this.angle, range, halfArc, life: 0.16, maxLife: 0.16 });
+    Audio_.slash();
+  }
+
+  // shockwave: hits everything around the robot and erases nearby enemy bullets
+  shockwave(game) {
+    const radius = 170;
+    for (const e of game.enemies) {
+      if (e.dead) continue;
+      const d = dist(this.x, this.y, e.x, e.y);
+      if (d > radius + e.r) continue;
+      e.takeDamage(22, game);
+      const a = angleTo(this.x, this.y, e.x, e.y);
+      e.knockX += Math.cos(a) * 700;
+      e.knockY += Math.sin(a) * 700;
+    }
+    for (const b of game.bullets) {
+      if (b.owner === 'enemy' && dist(this.x, this.y, b.x, b.y) < radius) b.dead = true;
+    }
+    this.invuln = Math.max(this.invuln, 0.3);
+    game.effects.push({ kind: 'ring', x: this.x, y: this.y, r0: this.r, r1: radius, life: 0.4, maxLife: 0.4, color: '79,243,255' });
+    game.shake = Math.min(20, game.shake + 10);
+    Audio_.shockwave();
   }
 
   takeDamage(amount, game) {
@@ -630,7 +796,7 @@ class Game {
     this.state = 'start'; // start | playing | paused | gameover
     this.reset();
     this.lastTime = performance.now();
-    Input.init(canvas);
+    Input.init();
     this.bindUI();
     requestAnimationFrame(this.loop.bind(this));
   }
@@ -640,6 +806,7 @@ class Game {
     this.bullets = [];
     this.enemies = [];
     this.particles = [];
+    this.effects = [];
     this.powerups = [];
     this.obstacles = this.makeObstacles();
     this.score = 0;
@@ -782,6 +949,7 @@ class Game {
         for (const e of this.enemies) {
           if (e.dead) continue;
           if (dist(b.x, b.y, e.x, e.y) < b.r + e.r) {
+            if (b instanceof Missile) { b.explode(this); break; }
             e.takeDamage(b.dmg, this);
             const knock = 90;
             e.knockX += Math.cos(Math.atan2(e.y - b.y, e.x - b.x)) * knock;
@@ -813,6 +981,9 @@ class Game {
     for (const pt of this.particles) pt.update(dt);
     this.particles = this.particles.filter(p => p.life > 0);
 
+    for (const fx of this.effects) fx.life -= dt;
+    this.effects = this.effects.filter(fx => fx.life > 0);
+
     this.shake = Math.max(0, this.shake - dt * 40);
 
     this.updateHUD();
@@ -832,6 +1003,19 @@ class Game {
     const dashPct = 1 - clamp(this.player.dashTimer / this.player.dashCooldown, 0, 1);
     document.getElementById('dashFill').style.width = dashPct * 100 + '%';
     document.getElementById('overheatWarning').classList.toggle('hidden', !this.player.overheated);
+    const p = this.player;
+    this.setSlot('slotLaser', p.overheated ? 1 : 0, p.overheated);
+    this.setSlot('slotMissile', p.cooldowns.missile / ATTACKS.missile.cooldown);
+    this.setSlot('slotMelee', p.cooldowns.melee / ATTACKS.melee.cooldown);
+    this.setSlot('slotShock', p.cooldowns.shock / ATTACKS.shock.cooldown);
+    this.setSlot('slotDash', p.dashTimer / p.dashCooldown);
+  }
+
+  // fill a HUD attack slot's cooldown shade (0 = ready, 1 = just used)
+  setSlot(id, frac, blocked) {
+    const el = document.getElementById(id);
+    el.querySelector('.cd').style.height = clamp(frac, 0, 1) * 100 + '%';
+    el.classList.toggle('ready', frac <= 0 && !blocked);
   }
 
   onGameOver() {
@@ -873,9 +1057,34 @@ class Game {
     for (const pu of this.powerups) pu.draw(ctx);
     for (const pt of this.particles) pt.draw(ctx);
     for (const e of this.enemies) e.draw(ctx);
+    for (const fx of this.effects) this.drawEffect(ctx, fx);
     for (const b of this.bullets) b.draw(ctx);
     if (this.player.alive) this.player.draw(ctx);
 
+    ctx.restore();
+  }
+
+  drawEffect(ctx, fx) {
+    const t = 1 - fx.life / fx.maxLife;
+    ctx.save();
+    if (fx.kind === 'ring') {
+      ctx.strokeStyle = `rgba(${fx.color},${1 - t})`;
+      ctx.lineWidth = 6 * (1 - t) + 1;
+      ctx.beginPath();
+      ctx.arc(fx.x, fx.y, lerp(fx.r0, fx.r1, t), 0, TAU);
+      ctx.stroke();
+    } else if (fx.kind === 'slash') {
+      ctx.translate(fx.x, fx.y);
+      ctx.rotate(fx.angle);
+      ctx.fillStyle = `rgba(255,120,240,${0.55 * (1 - t)})`;
+      ctx.shadowColor = '#ff78f0';
+      ctx.shadowBlur = 14;
+      ctx.beginPath();
+      ctx.arc(0, 0, fx.range, -fx.halfArc, fx.halfArc);
+      ctx.arc(0, 0, fx.range * 0.45, fx.halfArc, -fx.halfArc, true);
+      ctx.closePath();
+      ctx.fill();
+    }
     ctx.restore();
   }
 
