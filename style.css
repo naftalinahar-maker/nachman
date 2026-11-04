@@ -314,3 +314,12 @@ html, body {
   position: relative;
   font-size: 11px;
 }
+
+.link-btn {
+  display: inline-block;
+  margin-top: 14px;
+  color: #9db3ba;
+  font-size: 13px;
+}
+
+.link-btn:hover { color: var(--cyan); }
