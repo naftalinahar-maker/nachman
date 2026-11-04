@@ -83,6 +83,11 @@ const Audio_ = {
   slash() { this.noise(0.1, 0.1); this.tone(520, 0.1, 'square', 0.06, 180); },
   shockwave() { this.tone(70, 0.5, 'sine', 0.25, 30); this.noise(0.4, 0.18); },
   enemyShoot() { this.tone(rand(300, 360), 0.1, 'square', 0.05, 120); },
+  block() { this.tone(1100, 0.06, 'square', 0.05, 1500); },
+  sniperCharge() { this.tone(300, 1.2, 'sine', 0.05, 1400); },
+  sniperShot() { this.tone(1400, 0.2, 'sawtooth', 0.09, 200); },
+  blink() { this.tone(900, 0.15, 'triangle', 0.08, 250); },
+  fuse() { this.tone(1200, 0.05, 'square', 0.05); },
   explosion() { this.noise(0.35, 0.28); this.tone(90, 0.3, 'sine', 0.15, 30); },
   dash() { this.tone(200, 0.15, 'sine', 0.1, 500); },
   powerup() { this.tone(500, 0.12, 'triangle', 0.12, 900); },
@@ -513,6 +518,7 @@ class Player {
       if (d > range + e.r) continue;
       const a = angleTo(this.x, this.z, e.x, e.z);
       if (Math.abs(angleDiff(this.angle, a)) > halfArc && d > this.r + e.r) continue;
+      if (e.blocksFrom(this.x, this.z)) { game.shieldSpark(e, this.x, this.z); continue; }
       e.takeDamage(32 + (this.overdriveTimer > 0 ? 10 : 0), game);
       e.knockX += Math.sin(a) * 32;
       e.knockZ += Math.cos(a) * 32;
@@ -581,27 +587,120 @@ class Player {
 
 // ---------- enemies ----------
 const ENEMY_DEFS = {
-  scout:  { r: 0.8, hp: 22, speed: 12, color: 0xff5b4d, score: 60, contactDmg: 12, behavior: 'charge' },
-  gunner: { r: 0.95, hp: 34, speed: 7, color: 0xff8f3d, score: 90, contactDmg: 8, behavior: 'ranged',
+  scout:  { name: 'רחפן', r: 0.8, hp: 22, speed: 12, color: 0xff5b4d, score: 60, contactDmg: 12, behavior: 'charge' },
+  gunner: { name: 'תותחן', r: 0.95, hp: 34, speed: 7, color: 0xff8f3d, score: 90, contactDmg: 8, behavior: 'ranged',
             fireRate: 1.3, bulletSpeed: 19, bulletDmg: 8 },
-  heavy:  { r: 1.5, hp: 90, speed: 4.4, color: 0xc23bff, score: 160, contactDmg: 10, behavior: 'slam',
+  heavy:  { name: 'כבד', r: 1.5, hp: 90, speed: 4.4, color: 0xc23bff, score: 160, contactDmg: 10, behavior: 'slam',
             slamRadius: 5.6, slamDmg: 26, slamCharge: 1.1 },
   boss:   { r: 2.5, hp: 620, speed: 5.3, color: 0xff2d55, score: 900, contactDmg: 20, behavior: 'boss',
             fireRate: 0.5, bulletSpeed: 16, bulletDmg: 10 },
+  // rolls in, arms a short fuse and blows up — also explodes when destroyed
+  bomber: { name: 'מתאבד', r: 0.9, hp: 18, speed: 9.5, color: 0xffe14d, score: 70, contactDmg: 0, behavior: 'bomber',
+            fuse: 0.8, triggerRange: 2.8, blastRadius: 4.5, blastDmg: 28 },
+  // keeps far away, paints you with a laser, then fires one fast, heavy round
+  sniper: { name: 'צלף', r: 0.9, hp: 26, speed: 6, color: 0x9dff4f, score: 120, contactDmg: 6, behavior: 'sniper',
+            aimTime: 1.3, lockTime: 0.4, cooldown: 2.6, bulletSpeed: 50, bulletDmg: 22 },
+  // turns slowly; the front shield stops lasers and blade hits — flank it or use missiles/shockwave
+  shield: { name: 'נושא מגן', r: 1.3, hp: 70, speed: 5, color: 0x4d7cff, score: 150, contactDmg: 14, behavior: 'shield',
+            turnRate: 1.6, frontShield: 1.0 },
+  // hovering mothership that keeps launching mini drones
+  carrier: { name: 'ספינת אם', r: 1.8, hp: 120, speed: 3.5, color: 0x3dffc5, score: 220, contactDmg: 10, behavior: 'carrier',
+             launchEvery: 4, maxMinis: 6 },
+  mini:   { r: 0.5, hp: 8, speed: 14, color: 0x3dffc5, score: 20, contactDmg: 8, behavior: 'charge' },
+  // teleports around you and answers with a three-shot spread
+  blinker: { name: 'מבזיק', r: 0.85, hp: 30, speed: 0, color: 0xff4fd8, score: 140, contactDmg: 6, behavior: 'blink',
+             blinkEvery: 2.2, bulletSpeed: 20, bulletDmg: 9 },
 };
+
+// which enemies a wave can roll, and from which wave each one shows up
+const ROSTER = [
+  { type: 'scout', from: 1, weight: 5 },
+  { type: 'gunner', from: 2, weight: 3 },
+  { type: 'bomber', from: 2, weight: 2 },
+  { type: 'heavy', from: 3, weight: 1.5 },
+  { type: 'sniper', from: 3, weight: 1.5 },
+  { type: 'shield', from: 4, weight: 1.5 },
+  { type: 'blinker', from: 6, weight: 1.5 },
+  { type: 'carrier', from: 7, weight: 0.8 },
+];
 
 function makeEnemyModel(type, def) {
   const root = new THREE.Group();
   const armor = metal(0x6a3a3e, def.color, 0.3);
   const glow = metal(def.color, def.color, 1.2);
   const parts = { root, armor, glow };
-  if (type === 'scout') {
+  if (type === 'scout' || type === 'mini') {
     // hovering arrowhead drone
+    const drone = new THREE.Group();
+    drone.scale.setScalar(def.r / 0.8);
     const body = part(new THREE.ConeGeometry(0.7, 1.6, 4), armor, 1, 1, 1, 0, 1.0, 0);
     body.rotation.x = Math.PI / 2;
-    root.add(body);
-    root.add(part(GEO.sphere, glow, 0.25, 0.25, 0.25, 0, 1.0, -0.5));
+    drone.add(body);
+    drone.add(part(GEO.sphere, glow, 0.25, 0.25, 0.25, 0, 1.0, -0.5));
+    root.add(drone);
     parts.hover = true;
+  } else if (type === 'bomber') {
+    // spiked rolling mine with a blinking fuse light on top
+    const body = new THREE.Group();
+    body.position.y = 0.9;
+    body.add(part(GEO.sphere, armor, 0.8, 0.8, 0.8, 0, 0, 0));
+    const spike = new THREE.ConeGeometry(0.16, 0.5, 6);
+    for (const [x, y, z] of [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]]) {
+      const m = part(spike, armor, 1, 1, 1, x * 0.9, y * 0.9, z * 0.9);
+      m.lookAt(x * 2, y * 2, z * 2);
+      m.rotateX(Math.PI / 2);
+      body.add(m);
+    }
+    root.add(body);
+    root.add(part(GEO.sphere, glow, 0.22, 0.22, 0.22, 0, 1.85, 0));
+    parts.roll = body;
+  } else if (type === 'sniper') {
+    const r = makeRobot(0x4a6a3a, def.color, 0.95);
+    r.armor.emissive.setHex(def.color); r.armor.emissiveIntensity = 0.12;
+    const rifle = part(new THREE.CylinderGeometry(0.07, 0.1, 2.4, 8), metal(0x1b232a), 1, 1, 1, 0.8, 0.1, 1.1);
+    rifle.rotation.x = Math.PI / 2;
+    r.torso.add(rifle);
+    r.torso.add(part(GEO.box, r.glow, 0.12, 0.12, 0.3, 0.8, 0.28, 0.6)); // scope
+    root.add(r.root);
+    parts.armor = r.armor; parts.robot = r;
+  } else if (type === 'shield') {
+    root.add(part(GEO.box, armor, 1.5, 1.1, 1.4, 0, 1.0, -0.1));
+    root.add(part(GEO.box, armor, 0.8, 0.5, 0.7, 0, 1.8, -0.2));
+    root.add(part(GEO.box, glow, 0.6, 0.12, 0.05, 0, 1.85, 0.16));
+    for (const side of [-1, 1]) root.add(part(GEO.box, metal(0x1b232a), 0.4, 0.6, 1.8, side * 0.9, 0.3, -0.1));
+    // curved energy shield covering the front arc
+    const arc = def.frontShield;
+    const plate = new THREE.Mesh(
+      new THREE.CylinderGeometry(1.8, 1.8, 2.2, 20, 1, true, -arc, arc * 2),
+      new THREE.MeshStandardMaterial({ color: def.color, emissive: def.color, emissiveIntensity: 0.8, transparent: true, opacity: 0.45, side: THREE.DoubleSide }));
+    plate.position.y = 1.2;
+    root.add(plate);
+    parts.plate = plate;
+  } else if (type === 'carrier') {
+    const ship = new THREE.Group();
+    ship.position.y = 1.8;
+    ship.add(part(new THREE.CylinderGeometry(1.6, 2.0, 0.6, 16), armor, 1, 1, 1, 0, 0, 0));
+    ship.add(part(GEO.sphere, armor, 0.9, 0.5, 0.9, 0, 0.35, 0));
+    for (let i = 0; i < 6; i++) {
+      const a = (TAU / 6) * i;
+      ship.add(part(GEO.sphere, glow, 0.18, 0.18, 0.18, Math.sin(a) * 1.85, -0.05, Math.cos(a) * 1.85));
+    }
+    root.add(ship);
+    parts.hover = true;
+    parts.spin = ship;
+  } else if (type === 'blinker') {
+    root.add(part(new THREE.OctahedronGeometry(0.7), armor, 1, 1.4, 1, 0, 1.5, 0));
+    const rings = new THREE.Group();
+    rings.position.y = 1.5;
+    const torus = new THREE.TorusGeometry(1.05, 0.06, 8, 32);
+    const r1 = part(torus, glow, 1, 1, 1, 0, 0, 0);
+    const r2 = part(torus, glow, 1, 1, 1, 0, 0, 0);
+    r1.rotation.x = Math.PI / 2;
+    r2.rotation.y = Math.PI / 2;
+    rings.add(r1, r2);
+    root.add(rings);
+    parts.hover = true;
+    parts.spin = rings;
   } else if (type === 'gunner') {
     const r = makeRobot(0x9a5a3a, def.color, 1.05);
     r.armor.emissive.setHex(def.color); r.armor.emissiveIntensity = 0.12;
@@ -640,9 +739,21 @@ class Enemy {
     this.bossPattern = 0;
     this.bossTimer = 2;
     this.walk = rand(0, TAU);
+    this.angle = angleTo(x, z, game.player.x, game.player.z);
+    this.aimLeft = 0; this.aimAngle = this.angle; // sniper
+    this.fuseLeft = 0;                            // bomber
+    this.launchTimer = 1.5;                       // carrier
+    this.blinkTimer = rand(1, d.blinkEvery || 1); // blinker
+    this.volleyTimer = 0;
 
     this.model = makeEnemyModel(type, d);
     game.scene.add(this.model.root);
+
+    if (this.behavior === 'sniper') {
+      this.laser = new THREE.Mesh(GEO.box, new THREE.MeshBasicMaterial({ color: d.color, transparent: true, depthWrite: false }));
+      this.laser.visible = false;
+      game.scene.add(this.laser);
+    }
 
     if (this.behavior === 'slam') {
       this.slamRing = new THREE.Mesh(GEO.ring, new THREE.MeshBasicMaterial({ color: d.color, transparent: true, side: THREE.DoubleSide }));
@@ -675,13 +786,52 @@ class Enemy {
       game.addRing(this.x, this.z, 0.5, big ? 9 : 3, 0.35, this.def.color);
       game.shake = Math.min(1.6, game.shake + (big ? 1.2 : 0.3));
       game.onEnemyKilled(this);
+      if (this.behavior === 'bomber') this.detonate(game);
+    }
+  }
+
+  // true when a hit coming from (x, z) lands on the front shield
+  blocksFrom(x, z) {
+    return !!this.def.frontShield && Math.abs(angleDiff(this.angle, angleTo(this.x, this.z, x, z))) < this.def.frontShield;
+  }
+
+  detonate(game) {
+    if (this.detonated) return;
+    this.detonated = true;
+    this.dead = true;
+    const R = this.def.blastRadius, p = game.player;
+    if (dist(this.x, this.z, p.x, p.z) < R + p.r) p.takeDamage(this.def.blastDmg, game);
+    for (const e of game.enemies) {
+      if (e !== this && !e.dead && dist(this.x, this.z, e.x, e.z) < R + e.r) e.takeDamage(this.def.blastDmg * 0.6, game);
+    }
+    Audio_.explosion();
+    burst(game, this.x, 1, this.z, 0xffe14d, 30, 14, 0.7);
+    burst(game, this.x, 1, this.z, 0xff5b4d, 14, 10, 0.5);
+    game.addRing(this.x, this.z, 0.5, R, 0.35, 0xffe14d);
+    game.shake = Math.min(1.6, game.shake + 0.6);
+  }
+
+  // pick a free spot 9–14 units from the player and jump there
+  blink(game) {
+    const p = game.player;
+    for (let tries = 0; tries < 12; tries++) {
+      const a = rand(0, TAU), d = rand(9, 14);
+      const x = clamp(p.x + Math.sin(a) * d, -HALF_W + 2, HALF_W - 2);
+      const z = clamp(p.z + Math.cos(a) * d, -HALF_D + 2, HALF_D - 2);
+      if (game.obstacles.some(o => circleRectCollide(x, z, this.r + 0.5, o))) continue;
+      burst(game, this.x, 1.5, this.z, this.def.color, 12, 8, 0.4);
+      game.addRing(this.x, this.z, 1.5, 0.2, 0.25, this.def.color);
+      this.x = x; this.z = z;
+      game.addRing(x, z, 0.2, 2.5, 0.3, this.def.color);
+      Audio_.blink();
+      return;
     }
   }
 
   update(dt, game) {
     const p = game.player;
     const a = angleTo(this.x, this.z, p.x, p.z);
-    this.angle = a;
+    if (this.behavior !== 'shield') this.angle = a;
     const d = dist(this.x, this.z, p.x, p.z);
     let moving = false;
     const step = (dir, mul) => {
@@ -714,6 +864,71 @@ class Enemy {
         this.slamTelegraph = this.def.slamCharge;
       } else {
         step(1);
+      }
+    } else if (this.behavior === 'bomber') {
+      if (this.fuseLeft > 0) {
+        const before = this.fuseLeft;
+        this.fuseLeft -= dt;
+        if (Math.floor(before * 10) !== Math.floor(this.fuseLeft * 10)) Audio_.fuse();
+        step(1, 0.4);
+        if (this.fuseLeft <= 0) { this.detonate(game); return; }
+      } else {
+        step(1);
+        if (d < this.def.triggerRange + p.r) this.fuseLeft = this.def.fuse;
+      }
+    } else if (this.behavior === 'sniper') {
+      if (this.aimLeft > 0) {
+        this.aimLeft -= dt;
+        // tracks you at first, then locks so a sidestep dodges the shot
+        if (this.aimLeft > this.def.lockTime) this.aimAngle = a;
+        this.angle = this.aimAngle;
+        if (this.aimLeft <= 0) {
+          this.fireTimer = this.def.cooldown;
+          game.bullets.push(new Bullet(game, this.x + Math.sin(this.aimAngle) * 1.5, this.z + Math.cos(this.aimAngle) * 1.5,
+            this.aimAngle, this.def.bulletSpeed, this.def.bulletDmg, 'enemy', this.def.color, 0.35));
+          Audio_.sniperShot();
+        }
+      } else {
+        const desired = 24;
+        step(d < desired - 2 ? -1 : d > desired + 2 ? 1 : 0);
+        this.fireTimer -= dt;
+        if (this.fireTimer <= 0 && d < 45) { this.aimLeft = this.def.aimTime; Audio_.sniperCharge(); }
+      }
+    } else if (this.behavior === 'shield') {
+      this.angle += clamp(angleDiff(this.angle, a), -this.def.turnRate * dt, this.def.turnRate * dt);
+      this.x += Math.sin(this.angle) * this.speed * dt;
+      this.z += Math.cos(this.angle) * this.speed * dt;
+      moving = true;
+    } else if (this.behavior === 'carrier') {
+      const desired = 20;
+      step(d < desired - 2 ? -1 : d > desired + 2 ? 1 : 0);
+      this.launchTimer -= dt;
+      if (this.launchTimer <= 0) {
+        this.launchTimer = this.def.launchEvery;
+        const alive = game.enemies.filter(e => e.mother === this && !e.dead).length;
+        for (let i = 0; i < 2 && alive + i < this.def.maxMinis; i++) {
+          const side = i === 0 ? -1 : 1;
+          const mini = new Enemy(game, this.x + Math.cos(a) * side * 2, this.z - Math.sin(a) * side * 2, 'mini');
+          mini.mother = this;
+          game.spawnLater.push(mini);
+          burst(game, mini.x, 1.5, mini.z, this.def.color, 6, 5, 0.3);
+        }
+      }
+    } else if (this.behavior === 'blink') {
+      this.blinkTimer -= dt;
+      if (this.blinkTimer <= 0) {
+        this.blinkTimer = this.def.blinkEvery * rand(0.85, 1.15);
+        this.blink(game);
+        this.volleyTimer = 0.5;
+      }
+      if (this.volleyTimer > 0) {
+        this.volleyTimer -= dt;
+        if (this.volleyTimer <= 0) {
+          for (const off of [-0.25, 0, 0.25]) {
+            game.bullets.push(new Bullet(game, this.x, this.z, a + off, this.def.bulletSpeed, this.def.bulletDmg, 'enemy', this.def.color, 0.3));
+          }
+          Audio_.enemyShoot();
+        }
       }
     } else if (this.behavior === 'boss') {
       this.bossTimer -= dt;
@@ -769,7 +984,24 @@ class Enemy {
     const m = this.model;
     m.root.position.set(this.x, 0, this.z);
     m.root.rotation.y = this.angle;
-    if (m.hover) m.root.position.y = Math.sin(this.walk * 0.7) * 0.2;
+    if (m.hover) m.root.position.y = Math.sin(this.walk * 0.7 + performance.now() / 400) * 0.2;
+    if (m.spin) m.spin.rotation.y += 0.03;
+    if (m.roll) m.roll.rotation.x += 0.12;
+    if (this.behavior === 'bomber') {
+      const rate = this.fuseLeft > 0 ? 40 : 6;
+      m.glow.emissiveIntensity = Math.sin(performance.now() / 1000 * rate) > 0 ? 2.5 : 0.3;
+    }
+    if (this.laser) {
+      this.laser.visible = this.aimLeft > 0;
+      if (this.laser.visible) {
+        const len = 70;
+        this.laser.position.set(this.x + Math.sin(this.aimAngle) * len / 2, SHOT_Y, this.z + Math.cos(this.aimAngle) * len / 2);
+        this.laser.rotation.y = this.aimAngle;
+        const locked = this.aimLeft <= this.def.lockTime;
+        this.laser.scale.set(locked ? 0.14 : 0.05, locked ? 0.14 : 0.05, len);
+        this.laser.material.opacity = locked ? 0.9 : 0.35 + 0.2 * Math.sin(performance.now() / 50);
+      }
+    }
     if (m.robot) {
       const swing = Math.sin(this.walk) * 0.5;
       m.robot.legs[0].rotation.x = swing;
@@ -803,6 +1035,7 @@ class Enemy {
 
   dispose(game) {
     game.scene.remove(this.model.root, this.hpBar);
+    if (this.laser) game.scene.remove(this.laser);
     if (this.slamRing) game.scene.remove(this.slamRing);
   }
 }
@@ -883,6 +1116,7 @@ class Game {
     this.particles = [];
     this.powerups = [];
     this.effects = [];
+    this.spawnLater = [];
     this.obstacles = this.makeObstacles();
     this.score = 0;
     this.wave = 0;
@@ -949,22 +1183,26 @@ class Game {
   nextWave() {
     this.wave++;
     document.getElementById('wave').textContent = this.wave;
+    // every newly unlocked enemy type is guaranteed to appear in its first wave
+    const fresh = ROSTER.filter(r => r.from === this.wave).map(r => r.type);
     const banner = document.getElementById('waveBanner');
-    banner.textContent = this.wave % 5 === 0 ? `גל ${this.wave} — בוס!` : `גל ${this.wave}`;
+    let text = this.wave % 5 === 0 ? `גל ${this.wave} — בוס!` : `גל ${this.wave}`;
+    if (fresh.length) text += ` · אויב חדש: ${fresh.map(t => ENEMY_DEFS[t].name).join(', ')}`;
+    banner.textContent = text;
     banner.classList.add('hidden');
     void banner.offsetWidth; // restart the CSS animation
     banner.classList.remove('hidden');
     clearTimeout(this.bannerTO);
     this.bannerTO = setTimeout(() => banner.classList.add('hidden'), 1500);
 
-    const list = [];
+    const pool = ROSTER.filter(r => r.from <= this.wave);
+    const total = pool.reduce((sum, r) => sum + r.weight, 0);
+    const list = [...fresh];
     const n = 3 + this.wave * 2;
-    for (let i = 0; i < n; i++) {
-      let type = 'scout';
-      const roll = Math.random();
-      if (this.wave >= 2 && roll < 0.3) type = 'gunner';
-      if (this.wave >= 3 && roll < 0.15) type = 'heavy';
-      list.push(type);
+    while (list.length < n) {
+      let roll = Math.random() * total;
+      const entry = pool.find(r => (roll -= r.weight) < 0) || pool[0];
+      list.push(entry.type);
     }
     if (this.wave % 5 === 0) list.push('boss');
     for (let i = list.length - 1; i > 0; i--) {
@@ -991,6 +1229,12 @@ class Game {
     if (Math.random() < 0.18) {
       this.powerups.push(new PowerUp(this, enemy.x, enemy.z, pick(['health', 'overdrive', 'shield'])));
     }
+  }
+
+  shieldSpark(e, x, z) {
+    const a = angleTo(e.x, e.z, x, z);
+    burst(this, e.x + Math.sin(a) * 1.8, 1.4, e.z + Math.cos(a) * 1.8, 0x8fb0ff, 5, 6, 0.25);
+    Audio_.block();
   }
 
   // expanding ground ring (shockwave, explosions, slams)
@@ -1045,7 +1289,9 @@ class Game {
       if (this.nextWaveTimer <= 0) this.nextWave();
     }
 
-    for (const e of this.enemies) e.update(dt, this);
+    for (const e of this.enemies) if (!e.dead) e.update(dt, this);
+    this.enemies.push(...this.spawnLater);
+    this.spawnLater = [];
 
     for (const b of this.bullets) if (!b.dead) b.update(dt, this);
     for (const b of this.bullets) {
@@ -1054,6 +1300,7 @@ class Game {
         for (const e of this.enemies) {
           if (e.dead || dist(b.x, b.z, e.x, e.z) >= b.r + e.r) continue;
           if (b instanceof Missile) { b.explode(this); break; }
+          if (e.blocksFrom(b.x, b.z)) { b.dead = true; this.shieldSpark(e, b.x, b.z); break; }
           e.takeDamage(b.dmg, this);
           const a = angleTo(b.x, b.z, e.x, e.z);
           e.knockX += Math.sin(a) * 5.6;
