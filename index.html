@@ -55,9 +55,29 @@
         <div class="row"><span class="key">Shift</span> דאש התחמקות</div>
         <div class="row"><span class="key">Esc</span> השהיה</div>
       </div>
-      <p class="hint">לחצו Enter או על הכפתור כדי להתחיל. שרוד גל אחר גל של רובוטים עוינים. הנשק מתחמם — אל תירה בלי הפסקה. אספו שדרוגים מרובוטים מושמדים.</p>
-      <button id="startBtn" class="btn">התחל קרב</button>
+      <p class="hint">לחצו Enter או על הכפתור כדי לבחור רובוט וצבע. שרוד גל אחר גל של רובוטים עוינים. הנשק מתחמם — אל תירה בלי הפסקה. אחרי כל גל תבחרו שדרוג לרובוט שלכם.</p>
+      <button id="startBtn" class="btn">בחר רובוט</button>
       <div><a class="link-btn" href="3d/index.html">לגרסת התלת ממד ←</a></div>
+    </div>
+  </div>
+
+  <div id="hangarScreen" class="overlay hidden">
+    <div class="panel wide">
+      <h2>בחר את הרובוט שלך</h2>
+      <div id="robotCards" class="robot-cards"></div>
+      <h3 class="section-title">צבע</h3>
+      <div id="colorSwatches" class="swatches"></div>
+      <button id="battleBtn" class="btn">יציאה לקרב!</button>
+      <p class="hint small">מקשים: 1/2/3 לבחירת רובוט · ↑/↓ לצבע · Enter להתחלה</p>
+    </div>
+  </div>
+
+  <div id="upgradeScreen" class="overlay hidden">
+    <div class="panel wide">
+      <h2 id="upgradeTitle">גל הושלם!</h2>
+      <p class="subtitle">בחר שדרוג אחד לרובוט שלך</p>
+      <div id="upgradeCards" class="upgrade-cards"></div>
+      <p class="hint small">לחצו על שדרוג או על המקשים 1 / 2 / 3</p>
     </div>
   </div>
 
@@ -73,6 +93,7 @@
       <h2 class="danger">הרובוט הושמד</h2>
       <p id="finalStats" class="subtitle"></p>
       <button id="restartBtn" class="btn">קרב מחדש</button>
+      <div><button id="changeRobotBtn" class="link-btn as-button">החלף רובוט</button></div>
     </div>
   </div>
 </div>
