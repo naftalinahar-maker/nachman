@@ -2,8 +2,8 @@
 
 /* ============================================================
    ROGUE STEEL — top-down arcade robot combat.
-   No RPG systems: no leveling, no inventory, no dialogue.
    Score-based wave survival with skill-based movement/aim/heat.
+   Pick a robot + color in the hangar, choose one upgrade after each wave.
    ============================================================ */
 
 // ---------- utility ----------
@@ -325,18 +325,31 @@ class Obstacle {
 
 // ---------- player ----------
 class Player {
-  constructor(x, y) {
-    this.x = x; this.y = y; this.r = 16;
+  constructor(x, y, robotKey, color) {
+    const def = ROBOTS[robotKey] || ROBOTS.warrior;
+    this.def = def;
+    this.shape = def.shape;
+    this.color = color || '#4ff3ff';
+    this.rgb = hexToRgb(this.color);
+    this.x = x; this.y = y; this.r = def.r;
     this.angle = 0;
-    this.speed = 240;
-    this.maxHealth = 100; this.health = 100;
+    this.speed = def.speed;
+    this.maxHealth = def.hp; this.health = def.hp;
     this.maxHeat = 100; this.heat = 0;
     this.overheated = false;
     this.fireRate = 0.09; this.fireTimer = 0;
     this.heatPerShot = 9;
     this.heatDecay = 38;
     this.overheatDecay = 22;
-    this.dashCooldown = 1.4; this.dashTimer = 0;
+    this.laserDmg = def.laserDmg;
+    this.missileCount = 1;
+    this.missileCd = ATTACKS.missile.cooldown;
+    this.meleeCd = ATTACKS.melee.cooldown;
+    this.meleeRange = 58; this.meleeDmg = 32;
+    this.shockCd = ATTACKS.shock.cooldown;
+    this.shockRadius = 170;
+    this.upgrades = {};
+    this.dashCooldown = def.dashCd; this.dashTimer = 0;
     this.dashDuration = 0.18; this.dashing = 0;
     this.dashSpeed = 720;
     this.cooldowns = { missile: 0, melee: 0, shock: 0 };
@@ -369,7 +382,7 @@ class Player {
       this.dashTimer = this.dashCooldown;
       this.invuln = this.dashDuration + 0.1;
       Audio_.dash();
-      burst(game, this.x, this.y, '#4ff3ff', 14, 200, 0.4);
+      burst(game, this.x, this.y, this.color, 14, 200, 0.4);
     }
 
     const curSpeed = this.dashing > 0 ? this.dashSpeed : this.speed;
@@ -415,7 +428,7 @@ class Player {
         game.bullets.push(new Bullet(
           this.x + Math.cos(aim) * 22,
           this.y + Math.sin(aim) * 22,
-          aim + spread, 620, 12 + (this.overdriveTimer > 0 ? 3 : 0), 'player', '#4ff3ff', 4
+          aim + spread, 620, this.laserDmg + (this.overdriveTimer > 0 ? 3 : 0), 'player', this.color, 4
         ));
         Audio_.shoot();
         burst(game, this.x + Math.cos(aim) * 22, this.y + Math.sin(aim) * 22, '#bff9ff', 3, 80, 0.15);
@@ -425,18 +438,21 @@ class Player {
     for (const k in this.cooldowns) this.cooldowns[k] = Math.max(0, this.cooldowns[k] - dt);
 
     if (Input.down(ATTACKS.missile.code) && this.cooldowns.missile <= 0) {
-      this.cooldowns.missile = ATTACKS.missile.cooldown;
-      game.bullets.push(new Missile(this.x + Math.cos(aim) * 22, this.y + Math.sin(aim) * 22, aim));
+      this.cooldowns.missile = this.missileCd;
+      for (let i = 0; i < this.missileCount; i++) {
+        const off = (i - (this.missileCount - 1) / 2) * 0.35;
+        game.bullets.push(new Missile(this.x + Math.cos(aim) * 22, this.y + Math.sin(aim) * 22, aim + off));
+      }
       Audio_.missile();
     }
 
     if (Input.down(ATTACKS.melee.code) && this.cooldowns.melee <= 0) {
-      this.cooldowns.melee = ATTACKS.melee.cooldown;
+      this.cooldowns.melee = this.meleeCd;
       this.meleeAttack(game);
     }
 
     if (Input.down(ATTACKS.shock.code) && this.cooldowns.shock <= 0) {
-      this.cooldowns.shock = ATTACKS.shock.cooldown;
+      this.cooldowns.shock = this.shockCd;
       this.shockwave(game);
     }
 
@@ -462,7 +478,7 @@ class Player {
 
   // plasma blade: wide arc in front of the robot, heavy damage and knockback
   meleeAttack(game) {
-    const range = this.r + 58, halfArc = 1.15;
+    const range = this.r + this.meleeRange, halfArc = 1.15;
     for (const e of game.enemies) {
       if (e.dead) continue;
       const d = dist(this.x, this.y, e.x, e.y);
@@ -470,7 +486,7 @@ class Player {
       let diff = angleTo(this.x, this.y, e.x, e.y) - this.angle;
       diff = Math.atan2(Math.sin(diff), Math.cos(diff));
       if (Math.abs(diff) > halfArc && d > this.r + e.r) continue;
-      e.takeDamage(32 + (this.overdriveTimer > 0 ? 10 : 0), game);
+      e.takeDamage(this.meleeDmg + (this.overdriveTimer > 0 ? 10 : 0), game);
       const a = angleTo(this.x, this.y, e.x, e.y);
       e.knockX += Math.cos(a) * 520;
       e.knockY += Math.sin(a) * 520;
@@ -488,7 +504,7 @@ class Player {
 
   // shockwave: hits everything around the robot and erases nearby enemy bullets
   shockwave(game) {
-    const radius = 170;
+    const radius = this.shockRadius;
     for (const e of game.enemies) {
       if (e.dead) continue;
       const d = dist(this.x, this.y, e.x, e.y);
@@ -502,7 +518,7 @@ class Player {
       if (b.owner === 'enemy' && dist(this.x, this.y, b.x, b.y) < radius) b.dead = true;
     }
     this.invuln = Math.max(this.invuln, 0.3);
-    game.effects.push({ kind: 'ring', x: this.x, y: this.y, r0: this.r, r1: radius, life: 0.4, maxLife: 0.4, color: '79,243,255' });
+    game.effects.push({ kind: 'ring', x: this.x, y: this.y, r0: this.r, r1: radius, life: 0.4, maxLife: 0.4, color: this.rgb });
     game.shake = Math.min(20, game.shake + 10);
     Audio_.shockwave();
   }
@@ -523,7 +539,7 @@ class Player {
     ctx.translate(this.x, this.y);
 
     if (this.shieldTimer > 0) {
-      ctx.strokeStyle = 'rgba(79,243,255,0.7)';
+      ctx.strokeStyle = `rgba(${this.rgb},0.7)`;
       ctx.lineWidth = 3;
       ctx.beginPath();
       ctx.arc(0, 0, this.r + 8, 0, TAU);
@@ -533,40 +549,70 @@ class Player {
       ctx.globalAlpha = 0.5 + 0.3 * Math.sin(performance.now() / 30);
     }
 
-    // treads/body base
     ctx.rotate(this.angle);
-
-    // body
-    const flashColor = this.hitFlash > 0 ? '#ff8f80' : '#dff7ff';
-    ctx.fillStyle = '#132028';
-    ctx.strokeStyle = flashColor;
-    ctx.lineWidth = 2.5;
-    ctx.beginPath();
-    ctx.moveTo(this.r, 0);
-    ctx.lineTo(this.r * 0.2, this.r * 0.8);
-    ctx.lineTo(-this.r * 0.9, this.r * 0.6);
-    ctx.lineTo(-this.r * 0.9, -this.r * 0.6);
-    ctx.lineTo(this.r * 0.2, -this.r * 0.8);
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
-
-    // turret barrel
-    ctx.fillStyle = '#4ff3ff';
-    ctx.shadowColor = '#4ff3ff';
-    ctx.shadowBlur = this.overdriveTimer > 0 ? 16 : 6;
-    ctx.fillRect(this.r * 0.1, -3, this.r * 1.1, 6);
-    ctx.shadowBlur = 0;
-
-    // core
-    ctx.beginPath();
-    ctx.fillStyle = this.overheated ? '#ff5b4d' : '#4ff3ff';
-    ctx.arc(0, 0, 5, 0, TAU);
-    ctx.fill();
-
+    this.drawBody(ctx);
     ctx.restore();
   }
 }
+
+// shared by the arena and the hangar preview
+function drawRobotBody(ctx, shape, r, color, opts) {
+  const o = opts || {};
+  const stroke = o.hitFlash ? '#ff8f80' : color;
+  ctx.lineWidth = 2.5;
+  ctx.fillStyle = '#132028';
+  ctx.strokeStyle = stroke;
+
+  if (shape === 'block') {
+    // treads
+    ctx.fillStyle = '#0c1419';
+    ctx.fillRect(-r * 0.95, -r * 0.95, r * 1.7, r * 0.42);
+    ctx.fillRect(-r * 0.95, r * 0.53, r * 1.7, r * 0.42);
+    ctx.strokeRect(-r * 0.95, -r * 0.95, r * 1.7, r * 0.42);
+    ctx.strokeRect(-r * 0.95, r * 0.53, r * 1.7, r * 0.42);
+    ctx.fillStyle = '#132028';
+    ctx.beginPath();
+    ctx.rect(-r * 0.75, -r * 0.6, r * 1.4, r * 1.2);
+    ctx.fill(); ctx.stroke();
+  } else if (shape === 'dart') {
+    ctx.beginPath();
+    ctx.moveTo(r * 1.15, 0);
+    ctx.lineTo(-r * 0.6, r * 0.95);
+    ctx.lineTo(-r * 0.25, 0);
+    ctx.lineTo(-r * 0.6, -r * 0.95);
+    ctx.closePath();
+    ctx.fill(); ctx.stroke();
+  } else {
+    ctx.beginPath();
+    ctx.moveTo(r, 0);
+    ctx.lineTo(r * 0.2, r * 0.8);
+    ctx.lineTo(-r * 0.9, r * 0.6);
+    ctx.lineTo(-r * 0.9, -r * 0.6);
+    ctx.lineTo(r * 0.2, -r * 0.8);
+    ctx.closePath();
+    ctx.fill(); ctx.stroke();
+  }
+
+  // turret barrel
+  ctx.fillStyle = color;
+  ctx.shadowColor = color;
+  ctx.shadowBlur = o.glow ? 16 : 6;
+  const bw = shape === 'block' ? 8 : 6;
+  ctx.fillRect(r * 0.1, -bw / 2, r * (shape === 'block' ? 1.0 : 1.1), bw);
+  ctx.shadowBlur = 0;
+
+  // core
+  ctx.beginPath();
+  ctx.fillStyle = o.overheated ? '#ff5b4d' : color;
+  ctx.arc(0, 0, shape === 'block' ? 6 : 5, 0, TAU);
+  ctx.fill();
+}
+
+Player.prototype.drawBody = function (ctx) {
+  drawRobotBody(ctx, this.shape, this.r, this.color, {
+    hitFlash: this.hitFlash > 0, glow: this.overdriveTimer > 0, overheated: this.overheated,
+  });
+};
 
 // ---------- enemy types ----------
 const ENEMY_DEFS = {
@@ -793,7 +839,10 @@ class Game {
     this.ctx = canvas.getContext('2d');
     this.W = canvas.width;
     this.H = canvas.height;
-    this.state = 'start'; // start | playing | paused | gameover
+    this.state = 'start'; // start | hangar | playing | upgrade | paused | gameover
+    const saved = Loadout.load();
+    this.robotKey = saved.robot;
+    this.colorHex = saved.color;
     this.reset();
     this.lastTime = performance.now();
     Input.init();
@@ -802,7 +851,7 @@ class Game {
   }
 
   reset() {
-    this.player = new Player(this.W / 2, this.H / 2);
+    this.player = new Player(this.W / 2, this.H / 2, this.robotKey, this.colorHex);
     this.bullets = [];
     this.enemies = [];
     this.particles = [];
@@ -816,6 +865,8 @@ class Game {
     this.spawnTimer = 0;
     this.waveActive = false;
     this.waveBannerTimer = 0;
+    this.upgradeTimer = 0;
+    this.upgradeChoices = [];
   }
 
   makeObstacles() {
@@ -834,8 +885,11 @@ class Game {
   }
 
   bindUI() {
-    document.getElementById('startBtn').onclick = () => this.startGame();
+    document.getElementById('startBtn').onclick = () => this.openHangar();
     document.getElementById('restartBtn').onclick = () => this.startGame();
+    document.getElementById('changeRobotBtn').onclick = () => this.openHangar();
+    document.getElementById('battleBtn').onclick = () => this.startGame();
+    this.buildHangar();
     document.getElementById('resumeBtn').onclick = () => this.togglePause(false);
     window.addEventListener('keydown', e => {
       if (e.code === 'KeyP' || e.code === 'Escape') {
@@ -843,9 +897,78 @@ class Game {
         else if (this.state === 'paused') this.togglePause(false);
       }
       if (e.code === 'Enter') {
-        if (this.state === 'start' || this.state === 'gameover') this.startGame();
+        if (this.state === 'start') this.openHangar();
+        else if (this.state === 'hangar' || this.state === 'gameover') this.startGame();
+      }
+      const num = Loadout.numKey(e.code);
+      if (this.state === 'hangar') {
+        const pick = Loadout.hangarKey(e.code, this.robotKey, this.colorHex);
+        if (pick && pick.robot) this.selectRobot(pick.robot);
+        if (pick && pick.color) this.selectColor(pick.color);
+      } else if (this.state === 'upgrade' && num !== undefined && this.upgradeChoices[num]) {
+        this.chooseUpgrade(this.upgradeChoices[num]);
       }
     });
+  }
+
+  // ---------- hangar: pick robot + color ----------
+  buildHangar() {
+    this.previews = Loadout.buildHangar(k => this.selectRobot(k), c => this.selectColor(c), true);
+    this.refreshHangar();
+  }
+
+  selectRobot(key) { this.robotKey = key; Audio_.powerup(); this.saveLoadout(); this.refreshHangar(); }
+  selectColor(hex) { this.colorHex = hex; Audio_.tone(700, 0.08, 'triangle', 0.08, 1000); this.saveLoadout(); this.refreshHangar(); }
+
+  saveLoadout() { Loadout.save(this.robotKey, this.colorHex); }
+
+  refreshHangar() {
+    Loadout.refreshHangar(this.robotKey, this.colorHex);
+    this.drawPreviews(performance.now());
+  }
+
+  drawPreviews(now) {
+    for (const key of ROBOT_ORDER) {
+      const cv = this.previews[key];
+      const c = cv.getContext('2d');
+      c.clearRect(0, 0, cv.width, cv.height);
+      const selected = key === this.robotKey;
+      const color = selected ? this.colorHex : '#6f8790';
+      c.save();
+      c.translate(cv.width / 2, cv.height / 2);
+      c.scale(3.2, 3.2);
+      c.rotate(-Math.PI / 2 + (selected ? Math.sin(now / 600) * 0.5 : 0));
+      drawRobotBody(c, ROBOTS[key].shape, ROBOTS[key].r, color, { glow: selected });
+      c.restore();
+    }
+  }
+
+  openHangar() {
+    this.state = 'hangar';
+    for (const id of ['startScreen', 'gameOverScreen']) document.getElementById(id).classList.add('hidden');
+    document.getElementById('hud').classList.add('hidden');
+    document.getElementById('hangarScreen').classList.remove('hidden');
+    this.refreshHangar();
+  }
+
+  // ---------- upgrades between waves ----------
+  showUpgrades() {
+    this.upgradeChoices = Loadout.rollUpgrades(this.player);
+    this.state = 'upgrade';
+    Input.keys.clear(); Input.virtual.clear();
+    Loadout.showUpgradeScreen(this.wave, this.upgradeChoices, this.player, u => this.chooseUpgrade(u));
+    Audio_.tone(440, 0.15, 'triangle', 0.1, 880);
+  }
+
+  chooseUpgrade(u) {
+    if (this.state !== 'upgrade') return;
+    const p = this.player;
+    Loadout.applyUpgrade(p, u);
+    Audio_.powerup();
+    burst(this, p.x, p.y, p.color, 24, 180, 0.5);
+    this.state = 'playing';
+    this.lastTime = performance.now();
+    this.nextWave();
   }
 
   togglePause(pause) {
@@ -856,8 +979,7 @@ class Game {
   startGame() {
     this.reset();
     this.state = 'playing';
-    document.getElementById('startScreen').classList.add('hidden');
-    document.getElementById('gameOverScreen').classList.add('hidden');
+    for (const id of ['startScreen', 'gameOverScreen', 'hangarScreen', 'upgradeScreen']) document.getElementById(id).classList.add('hidden');
     document.getElementById('hud').classList.remove('hidden');
     document.getElementById('highscore').textContent = localStorage.getItem('rs_highscore') || 0;
     this.nextWave();
@@ -934,7 +1056,10 @@ class Game {
       this.waveActive = false;
       this.score += 50 * this.wave;
       document.getElementById('score').textContent = this.score;
-      setTimeout(() => { if (this.state === 'playing') this.nextWave(); }, 1400);
+      this.upgradeTimer = 1.2; // short breather, then the upgrade screen
+    } else if (this.upgradeTimer > 0) {
+      this.upgradeTimer -= dt;
+      if (this.upgradeTimer <= 0) { this.upgradeTimer = 0; this.showUpgrades(); return; }
     }
 
     for (const e of this.enemies) e.update(dt, this);
@@ -1005,9 +1130,9 @@ class Game {
     document.getElementById('overheatWarning').classList.toggle('hidden', !this.player.overheated);
     const p = this.player;
     this.setSlot('slotLaser', p.overheated ? 1 : 0, p.overheated);
-    this.setSlot('slotMissile', p.cooldowns.missile / ATTACKS.missile.cooldown);
-    this.setSlot('slotMelee', p.cooldowns.melee / ATTACKS.melee.cooldown);
-    this.setSlot('slotShock', p.cooldowns.shock / ATTACKS.shock.cooldown);
+    this.setSlot('slotMissile', p.cooldowns.missile / p.missileCd);
+    this.setSlot('slotMelee', p.cooldowns.melee / p.meleeCd);
+    this.setSlot('slotShock', p.cooldowns.shock / p.shockCd);
     this.setSlot('slotDash', p.dashTimer / p.dashCooldown);
   }
 
@@ -1093,11 +1218,12 @@ class Game {
     this.lastTime = now;
     this.update(dt);
     this.draw();
+    if (this.state === 'hangar') this.drawPreviews(now);
     requestAnimationFrame(this.loop.bind(this));
   }
 }
 
 window.addEventListener('DOMContentLoaded', () => {
   const canvas = document.getElementById('game');
-  new Game(canvas);
+  window.game = new Game(canvas);
 });

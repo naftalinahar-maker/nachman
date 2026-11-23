@@ -298,10 +298,13 @@ class PowerUp {
 
 // ---------- robot model ----------
 // Builds a walking biped: legs swing from the hips, the right arm is the gun.
-function makeRobot(bodyColor, glowColor, scale) {
+// `shape` picks the variant: 'dart' = slim with back fins, 'block' = wide with a rocket pod.
+function makeRobot(bodyColor, glowColor, scale, shape) {
   const root = new THREE.Group();
   const rig = new THREE.Group();
   rig.scale.setScalar(scale);
+  if (shape === 'dart') rig.scale.x *= 0.85;
+  if (shape === 'block') rig.scale.x *= 1.15;
   root.add(rig);
   const armor = metal(bodyColor);
   const dark = metal(0x1b232a);
@@ -338,6 +341,23 @@ function makeRobot(bodyColor, glowColor, scale) {
   const blade = part(GEO.box, metal(0xff78f0, 0xff78f0, 1.5), 0.08, 0.08, 1.6, -0.8, 0.05, 0.8);
   blade.visible = false;
   torso.add(blade);
+  if (shape === 'dart') {
+    // swept-back fins and an antenna
+    for (const side of [-1, 1]) {
+      const fin = part(GEO.box, glow, 0.07, 0.55, 0.75, side * 0.42, 0.95, -0.55);
+      fin.rotation.x = -0.5;
+      fin.rotation.z = side * 0.35;
+      torso.add(fin);
+    }
+    torso.add(part(GEO.box, dark, 0.05, 0.5, 0.05, 0.18, 1.65, 0));
+    torso.add(part(GEO.sphere, glow, 0.07, 0.07, 0.07, 0.18, 1.92, 0));
+  } else if (shape === 'block') {
+    // rocket pod on the left shoulder + heavy backpack
+    torso.add(part(GEO.box, armor, 0.55, 0.45, 0.75, -0.85, 1.3, -0.05));
+    for (const dx of [-0.13, 0.13]) torso.add(part(GEO.sphere, glow, 0.09, 0.09, 0.05, -0.85 + dx, 1.3, 0.33));
+    torso.add(part(GEO.box, dark, 0.9, 0.7, 0.4, 0, 0.6, -0.55));
+    torso.add(part(GEO.box, glow, 0.6, 0.08, 0.05, 0, 0.75, -0.76));
+  }
   rig.add(torso);
 
   return { root, rig, legs, torso, blade, glow, armor };
@@ -362,19 +382,35 @@ class Obstacle {
 }
 
 // ---------- player ----------
+// the shared robot table is in 2D pixels; 16 px = 1 world unit
+const PX = 1 / 16;
+const MODEL_SCALE = { dart: 1.1, arrow: 1.3, block: 1.55 };
+
 class Player {
-  constructor(game) {
-    this.x = 0; this.z = 0; this.r = 1.0;
+  constructor(game, robotKey, colorHex) {
+    const def = ROBOTS[robotKey] || ROBOTS.warrior;
+    this.def = def;
+    this.color = parseInt((colorHex || '#4ff3ff').slice(1), 16);
+    this.scale = MODEL_SCALE[def.shape] || 1.3;
+    this.x = 0; this.z = 0; this.r = def.r * PX;
     this.angle = Math.PI; // face away from the camera
-    this.speed = 15;
-    this.maxHealth = 100; this.health = 100;
+    this.speed = def.speed * PX;
+    this.maxHealth = def.hp; this.health = def.hp;
+    this.laserDmg = def.laserDmg;
+    this.missileCount = 1;
+    this.missileCd = ATTACKS.missile.cooldown;
+    this.meleeCd = ATTACKS.melee.cooldown;
+    this.meleeRange = 3.6; this.meleeDmg = 32;
+    this.shockCd = ATTACKS.shock.cooldown;
+    this.shockRadius = 10.6;
+    this.upgrades = {};
     this.maxHeat = 100; this.heat = 0;
     this.overheated = false;
     this.fireRate = 0.09; this.fireTimer = 0;
     this.heatPerShot = 9;
     this.heatDecay = 38;
     this.overheatDecay = 22;
-    this.dashCooldown = 1.4; this.dashTimer = 0;
+    this.dashCooldown = def.dashCd; this.dashTimer = 0;
     this.dashDuration = 0.18; this.dashing = 0;
     this.dashSpeed = 45;
     this.dashDx = 0; this.dashDz = -1;
@@ -387,10 +423,11 @@ class Player {
     this.walk = 0;
     this.alive = true;
 
-    this.model = makeRobot(0xdff7ff, 0x4ff3ff, 1.3);
+    const tint = new THREE.Color(0xdff7ff).lerp(new THREE.Color(this.color), 0.5).getHex();
+    this.model = makeRobot(tint, this.color, this.scale, def.shape);
     game.scene.add(this.model.root);
-    this.shieldMesh = new THREE.Mesh(GEO.sphere, new THREE.MeshBasicMaterial({ color: 0x4ff3ff, transparent: true, opacity: 0.18, depthWrite: false }));
-    this.shieldMesh.scale.setScalar(1.8);
+    this.shieldMesh = new THREE.Mesh(GEO.sphere, new THREE.MeshBasicMaterial({ color: this.color, transparent: true, opacity: 0.18, depthWrite: false }));
+    this.shieldMesh.scale.setScalar(1.8 * this.scale / 1.3);
     this.shieldMesh.position.y = 1.4;
     this.model.root.add(this.shieldMesh);
   }
@@ -417,7 +454,7 @@ class Player {
       this.dashTimer = this.dashCooldown;
       this.invuln = this.dashDuration + 0.1;
       Audio_.dash();
-      burst(game, this.x, 1, this.z, 0x4ff3ff, 14, 10, 0.4);
+      burst(game, this.x, 1, this.z, this.color, 14, 10, 0.4);
     }
 
     if (this.dashing > 0) {
@@ -458,23 +495,26 @@ class Player {
       if (this.heat >= this.maxHeat) { this.overheated = true; Audio_.overheat(); }
       const mz0 = this.muzzle();
       game.bullets.push(new Bullet(game, mz0.x, mz0.z, aim + rand(-0.03, 0.03), 39,
-        12 + (this.overdriveTimer > 0 ? 3 : 0), 'player', 0x4ff3ff, 0.22));
+        this.laserDmg + (this.overdriveTimer > 0 ? 3 : 0), 'player', this.color, 0.22));
       Audio_.shoot();
     }
 
     for (const k in this.cooldowns) this.cooldowns[k] = Math.max(0, this.cooldowns[k] - dt);
 
     if (Input.down(ATTACKS.missile.code) && this.cooldowns.missile <= 0) {
-      this.cooldowns.missile = ATTACKS.missile.cooldown;
-      game.bullets.push(new Missile(game, this.x + Math.sin(aim) * 1.3, this.z + Math.cos(aim) * 1.3, aim));
+      this.cooldowns.missile = this.missileCd;
+      for (let i = 0; i < this.missileCount; i++) {
+        const a = aim + (i - (this.missileCount - 1) / 2) * 0.35;
+        game.bullets.push(new Missile(game, this.x + Math.sin(a) * 1.3, this.z + Math.cos(a) * 1.3, a));
+      }
       Audio_.missile();
     }
     if (Input.down(ATTACKS.melee.code) && this.cooldowns.melee <= 0) {
-      this.cooldowns.melee = ATTACKS.melee.cooldown;
+      this.cooldowns.melee = this.meleeCd;
       this.meleeAttack(game);
     }
     if (Input.down(ATTACKS.shock.code) && this.cooldowns.shock <= 0) {
-      this.cooldowns.shock = ATTACKS.shock.cooldown;
+      this.cooldowns.shock = this.shockCd;
       this.shockwave(game);
     }
 
@@ -489,7 +529,8 @@ class Player {
   // gun barrel tip in world space (the cannon sits on the right arm)
   muzzle() {
     const s = Math.sin(this.angle), c = Math.cos(this.angle);
-    return { x: this.x + s * 1.6 + c * 1.0, z: this.z + c * 1.6 - s * 1.0 };
+    const k = this.scale / 1.3;
+    return { x: this.x + (s * 1.6 + c * 1.0) * k, z: this.z + (c * 1.6 - s * 1.0) * k };
   }
 
   // snap toward the closest enemy within ~35° of facing, else shoot straight ahead
@@ -506,14 +547,14 @@ class Player {
 
   // plasma blade: wide arc in front of the robot, heavy damage and knockback
   meleeAttack(game) {
-    const range = this.r + 3.6, halfArc = 1.15;
+    const range = this.r + this.meleeRange, halfArc = 1.15;
     for (const e of game.enemies) {
       if (e.dead) continue;
       const d = dist(this.x, this.z, e.x, e.z);
       if (d > range + e.r) continue;
       const a = angleTo(this.x, this.z, e.x, e.z);
       if (Math.abs(angleDiff(this.angle, a)) > halfArc && d > this.r + e.r) continue;
-      e.takeDamage(32 + (this.overdriveTimer > 0 ? 10 : 0), game);
+      e.takeDamage(this.meleeDmg + (this.overdriveTimer > 0 ? 10 : 0), game);
       e.knockX += Math.sin(a) * 32;
       e.knockZ += Math.cos(a) * 32;
     }
@@ -530,7 +571,7 @@ class Player {
 
   // shockwave: hits everything around the robot and erases nearby enemy bullets
   shockwave(game) {
-    const radius = 10.6;
+    const radius = this.shockRadius;
     for (const e of game.enemies) {
       if (e.dead) continue;
       const d = dist(this.x, this.z, e.x, e.z);
@@ -544,7 +585,7 @@ class Player {
       if (b.owner === 'enemy' && dist(this.x, this.z, b.x, b.z) < radius) b.dead = true;
     }
     this.invuln = Math.max(this.invuln, 0.3);
-    game.addRing(this.x, this.z, this.r, radius, 0.45, 0x4ff3ff);
+    game.addRing(this.x, this.z, this.r, radius, 0.45, this.color);
     game.shake = Math.min(1.4, game.shake + 0.7);
     Audio_.shockwave();
   }
@@ -573,7 +614,7 @@ class Player {
     m.blade.visible = this.slashTimer > 0;
     m.armor.emissive.setHex(this.hitFlash > 0 ? 0xff3322 : 0x000000);
     m.armor.emissiveIntensity = this.hitFlash > 0 ? 0.8 : 0;
-    m.glow.emissive.setHex(this.overheated ? 0xff5b4d : this.overdriveTimer > 0 ? 0xffd447 : 0x4ff3ff);
+    m.glow.emissive.setHex(this.overheated ? 0xff5b4d : this.overdriveTimer > 0 ? 0xffd447 : this.color);
     m.root.visible = !(this.invuln > 0 && this.dashing <= 0 && Math.sin(performance.now() / 30) > 0.3);
     this.shieldMesh.visible = this.shieldTimer > 0;
   }
@@ -817,7 +858,10 @@ class Game {
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.camera = new THREE.PerspectiveCamera(50, 1, 0.1, 300);
     this.camFocus = new THREE.Vector3(0, 0, 0);
-    this.state = 'start'; // start | playing | paused | gameover
+    this.state = 'start'; // start | hangar | playing | upgrade | paused | gameover
+    const saved = Loadout.load();
+    this.robotKey = saved.robot;
+    this.colorHex = saved.color;
     this.buildScene();
     this.reset();
     this.resize();
@@ -875,9 +919,7 @@ class Game {
       for (const o of list) o.dispose ? o.dispose(this) : this.scene.remove(o.mesh);
     }
     for (const o of this.obstacles || []) this.scene.remove(...o.meshes);
-    if (this.player) this.scene.remove(this.player.model.root);
-
-    this.player = new Player(this);
+    this.makePlayer();
     this.bullets = [];
     this.enemies = [];
     this.particles = [];
@@ -890,8 +932,16 @@ class Game {
     this.spawnQueue = [];
     this.spawnTimer = 0;
     this.waveActive = false;
-    this.nextWaveTimer = 0;
+    this.upgradeTimer = 0;
+    this.upgradeChoices = [];
     this.camFocus.set(0, 0, 0);
+    this.player.syncModel();
+  }
+
+  // (re)build the player's robot from the current hangar choice
+  makePlayer() {
+    if (this.player) this.scene.remove(this.player.model.root);
+    this.player = new Player(this, this.robotKey, this.colorHex);
     this.player.syncModel();
   }
 
@@ -914,16 +964,83 @@ class Game {
   }
 
   bindUI() {
-    document.getElementById('startBtn').onclick = () => this.startGame();
+    document.getElementById('startBtn').onclick = () => this.openHangar();
     document.getElementById('restartBtn').onclick = () => this.startGame();
+    document.getElementById('changeRobotBtn').onclick = () => this.openHangar();
+    document.getElementById('battleBtn').onclick = () => this.startGame();
+    Loadout.buildHangar(k => this.selectRobot(k), c => this.selectColor(c), false);
     document.getElementById('resumeBtn').onclick = () => this.togglePause(false);
     window.addEventListener('keydown', e => {
       if (e.code === 'Escape' || e.code === 'KeyP') {
         if (this.state === 'playing') this.togglePause(true);
         else if (this.state === 'paused') this.togglePause(false);
       }
-      if (e.code === 'Enter' && (this.state === 'start' || this.state === 'gameover')) this.startGame();
+      if (e.code === 'Enter') {
+        if (this.state === 'start') this.openHangar();
+        else if (this.state === 'hangar' || this.state === 'gameover') this.startGame();
+      }
+      if (this.state === 'hangar') {
+        const pick = Loadout.hangarKey(e.code, this.robotKey, this.colorHex);
+        if (pick && pick.robot) this.selectRobot(pick.robot);
+        if (pick && pick.color) this.selectColor(pick.color);
+      } else if (this.state === 'upgrade') {
+        const num = Loadout.numKey(e.code);
+        if (num !== undefined && this.upgradeChoices[num]) this.chooseUpgrade(this.upgradeChoices[num]);
+      }
     });
+  }
+
+  // ---------- hangar: the chosen robot turns on the arena floor ----------
+  openHangar() {
+    this.state = 'hangar';
+    for (const id of ['startScreen', 'gameOverScreen']) document.getElementById(id).classList.add('hidden');
+    document.getElementById('hud').classList.add('hidden');
+    document.getElementById('hangarScreen').classList.remove('hidden');
+    this.reset();
+    this.refreshHangar();
+  }
+
+  selectRobot(key) {
+    this.robotKey = key;
+    Audio_.powerup();
+    this.afterLoadoutChange();
+  }
+
+  selectColor(hex) {
+    this.colorHex = hex;
+    Audio_.tone(700, 0.08, 'triangle', 0.08, 1000);
+    this.afterLoadoutChange();
+  }
+
+  afterLoadoutChange() {
+    Loadout.save(this.robotKey, this.colorHex);
+    const angle = this.player.angle;
+    this.makePlayer();
+    this.player.angle = angle;
+    burst(this, 0, 1.5, 0, this.player.color, 18, 8, 0.6);
+    this.refreshHangar();
+  }
+
+  refreshHangar() { Loadout.refreshHangar(this.robotKey, this.colorHex); }
+
+  // ---------- upgrades between waves ----------
+  showUpgrades() {
+    this.upgradeChoices = Loadout.rollUpgrades(this.player);
+    this.state = 'upgrade';
+    Input.keys.clear(); Input.virtual.clear();
+    Loadout.showUpgradeScreen(this.wave, this.upgradeChoices, this.player, u => this.chooseUpgrade(u));
+    Audio_.tone(440, 0.15, 'triangle', 0.1, 880);
+  }
+
+  chooseUpgrade(u) {
+    if (this.state !== 'upgrade') return;
+    const p = this.player;
+    Loadout.applyUpgrade(p, u);
+    Audio_.powerup();
+    burst(this, p.x, 1.5, p.z, p.color, 24, 10, 0.6);
+    this.state = 'playing';
+    this.lastTime = performance.now();
+    this.nextWave();
   }
 
   togglePause(pause) {
@@ -934,8 +1051,7 @@ class Game {
   startGame() {
     this.reset();
     this.state = 'playing';
-    document.getElementById('startScreen').classList.add('hidden');
-    document.getElementById('gameOverScreen').classList.add('hidden');
+    for (const id of ['startScreen', 'gameOverScreen', 'hangarScreen', 'upgradeScreen']) document.getElementById(id).classList.add('hidden');
     document.getElementById('hud').classList.remove('hidden');
     document.getElementById('score').textContent = 0;
     document.getElementById('highscore').textContent = this.loadHighscore();
@@ -1039,10 +1155,10 @@ class Game {
       this.waveActive = false;
       this.score += 50 * this.wave;
       document.getElementById('score').textContent = this.score;
-      this.nextWaveTimer = 1.4;
-    } else if (!this.waveActive) {
-      this.nextWaveTimer -= dt;
-      if (this.nextWaveTimer <= 0) this.nextWave();
+      this.upgradeTimer = 1.2; // short breather, then the upgrade screen
+    } else if (this.upgradeTimer > 0) {
+      this.upgradeTimer -= dt;
+      if (this.upgradeTimer <= 0) { this.upgradeTimer = 0; this.showUpgrades(); return; }
     }
 
     for (const e of this.enemies) e.update(dt, this);
@@ -1117,9 +1233,9 @@ class Game {
     document.getElementById('heatFill').style.width = clamp(p.heat / p.maxHeat, 0, 1) * 100 + '%';
     document.getElementById('overheatWarning').classList.toggle('hidden', !p.overheated);
     this.setSlot('slotLaser', p.overheated ? 1 : 0, p.overheated);
-    this.setSlot('slotMissile', p.cooldowns.missile / ATTACKS.missile.cooldown);
-    this.setSlot('slotMelee', p.cooldowns.melee / ATTACKS.melee.cooldown);
-    this.setSlot('slotShock', p.cooldowns.shock / ATTACKS.shock.cooldown);
+    this.setSlot('slotMissile', p.cooldowns.missile / p.missileCd);
+    this.setSlot('slotMelee', p.cooldowns.melee / p.meleeCd);
+    this.setSlot('slotShock', p.cooldowns.shock / p.shockCd);
     this.setSlot('slotDash', p.dashTimer / p.dashCooldown);
   }
 
@@ -1133,7 +1249,7 @@ class Game {
   onGameOver() {
     this.state = 'gameover';
     Audio_.gameOver();
-    burst(this, this.player.x, 1.5, this.player.z, 0x4ff3ff, 60, 16, 1);
+    burst(this, this.player.x, 1.5, this.player.z, this.player.color, 60, 16, 1);
     this.scene.remove(this.player.model.root);
     const hs = Math.max(this.score, this.loadHighscore());
     try { localStorage.setItem('rs3d_highscore', hs); } catch (e) { /* storage blocked */ }
@@ -1151,6 +1267,15 @@ class Game {
       const t = performance.now() / 6000;
       this.camera.position.set(Math.sin(t) * 40, 26, Math.cos(t) * 40);
       this.camera.lookAt(0, 0, 0);
+      return;
+    }
+    if (this.state === 'hangar') {
+      // close-up of the robot, turning slowly in the upper part of the screen
+      this.player.angle += dt * 0.8;
+      this.player.syncModel();
+      const k = this.camDist || 1;
+      this.camera.position.set(0, 7.5 * k, 14 * k);
+      this.camera.lookAt(0, -2.2, 0);
       return;
     }
     const k = this.camDist || 1;
@@ -1175,4 +1300,4 @@ class Game {
   }
 }
 
-new Game(document.getElementById('game3d'));
+window.game = new Game(document.getElementById('game3d'));
