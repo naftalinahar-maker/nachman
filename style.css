@@ -407,3 +407,25 @@ html, body {
   .robot-cards, .upgrade-cards { flex-direction: column; }
   .panel.wide { padding: 20px 16px; max-height: 96vh; overflow-y: auto; }
 }
+
+/* 3D hangar: keep the top of the screen clear so the robot model shows through */
+.overlay.see-through {
+  background: linear-gradient(to bottom, rgba(2,4,6,0) 0%, rgba(2,4,6,0) 30%, rgba(2,4,6,0.85) 62%);
+  align-items: flex-end;
+  padding-bottom: 2vh;
+}
+.overlay.see-through .panel { padding: 18px 24px; background: rgba(8,14,20,0.82); }
+.overlay.see-through h2 { margin-bottom: 10px; }
+.overlay.see-through .robot-cards { margin-bottom: 12px; }
+.overlay.see-through .swatches { margin-bottom: 14px; }
+
+@media (max-width: 640px) {
+  /* phones: compact row of robot cards so the 3D robot stays visible above */
+  .overlay.see-through .robot-cards { flex-direction: row; gap: 8px; }
+  .overlay.see-through .robot-card { padding: 8px 4px; }
+  .overlay.see-through .robot-card .name { font-size: 16px; }
+  .overlay.see-through .robot-card .desc,
+  .overlay.see-through .stat-row { display: none; }
+  .overlay.see-through .swatch { width: 34px; height: 34px; }
+  .overlay.see-through .swatches { gap: 8px; }
+}

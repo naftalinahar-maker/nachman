@@ -323,44 +323,6 @@ class Obstacle {
   }
 }
 
-// ---------- robots & colors (chosen in the hangar) ----------
-const ROBOTS = {
-  striker: { name: 'ברק', desc: 'מהיר וזריז, שריון קל', r: 14, speed: 300, hp: 75, dashCd: 0.9, laserDmg: 10, shape: 'dart',
-             bars: { speed: 3, armor: 1, power: 2 } },
-  warrior: { name: 'לוחם', desc: 'מאוזן — טוב בהכל', r: 16, speed: 240, hp: 100, dashCd: 1.4, laserDmg: 12, shape: 'arrow',
-             bars: { speed: 2, armor: 2, power: 2 } },
-  tank:    { name: 'טנק', desc: 'איטי, חזק ועמיד מאוד', r: 20, speed: 185, hp: 150, dashCd: 1.9, laserDmg: 15, shape: 'block',
-             bars: { speed: 1, armor: 3, power: 3 } },
-};
-const ROBOT_ORDER = ['striker', 'warrior', 'tank'];
-
-const COLORS = [
-  { name: 'תכלת', hex: '#4ff3ff' },
-  { name: 'ירוק', hex: '#4fe07d' },
-  { name: 'צהוב', hex: '#ffd447' },
-  { name: 'כתום', hex: '#ff9a3d' },
-  { name: 'ורוד', hex: '#ff78f0' },
-  { name: 'סגול', hex: '#a78bfa' },
-];
-
-function hexToRgb(hex) {
-  const n = parseInt(hex.slice(1), 16);
-  return `${(n >> 16) & 255},${(n >> 8) & 255},${n & 255}`;
-}
-
-// ---------- upgrades (picked between waves) ----------
-const UPGRADES = [
-  { id: 'armor',   icon: '🛡️', name: 'שריון עבה',     desc: '+25 שריון מקסימלי, וגם מתקן 25',      apply: p => { p.maxHealth += 25; p.health = Math.min(p.maxHealth, p.health + 25); } },
-  { id: 'repair',  icon: '🔧', name: 'תיקון מלא',     desc: 'השריון חוזר למלא',                    apply: p => { p.health = p.maxHealth; }, ok: p => p.health < p.maxHealth * 0.8, repeat: true },
-  { id: 'speed',   icon: '⚙️', name: 'מנועים מהירים',  desc: 'הרובוט זז מהר יותר ב-12%',            apply: p => { p.speed *= 1.12; } },
-  { id: 'laser',   icon: '🔫', name: 'לייזר חזק',      desc: '+25% נזק ללייזר',                     apply: p => { p.laserDmg *= 1.25; } },
-  { id: 'cooling', icon: '❄️', name: 'מערכת קירור',    desc: 'הנשק מתחמם לאט יותר (20%-)',          apply: p => { p.heatPerShot *= 0.8; } },
-  { id: 'missile', icon: '🚀', name: 'עוד טיל',        desc: 'יורה טיל נוסף בכל פעם',               apply: p => { p.missileCount++; }, max: 3 },
-  { id: 'blade',   icon: '⚔️', name: 'להב ארוך',       desc: 'הלהב מגיע רחוק יותר וחזק יותר',       apply: p => { p.meleeRange *= 1.25; p.meleeDmg *= 1.2; } },
-  { id: 'shock',   icon: '💥', name: 'גל הלם על',     desc: 'נטען מהר יותר וגדול יותר',            apply: p => { p.shockCd *= 0.75; p.shockRadius *= 1.12; } },
-  { id: 'dash',    icon: '💨', name: 'דאש טורבו',      desc: 'הדאש נטען מהר יותר ב-30%',            apply: p => { p.dashCooldown *= 0.7; } },
-];
-
 // ---------- player ----------
 class Player {
   constructor(x, y, robotKey, color) {
@@ -878,13 +840,9 @@ class Game {
     this.W = canvas.width;
     this.H = canvas.height;
     this.state = 'start'; // start | hangar | playing | upgrade | paused | gameover
-    this.robotKey = 'warrior';
-    this.colorHex = COLORS[0].hex;
-    try {
-      const saved = JSON.parse(localStorage.getItem('rs_loadout') || '{}');
-      if (ROBOTS[saved.robot]) this.robotKey = saved.robot;
-      if (COLORS.some(c => c.hex === saved.color)) this.colorHex = saved.color;
-    } catch (e) { /* storage unavailable */ }
+    const saved = Loadout.load();
+    this.robotKey = saved.robot;
+    this.colorHex = saved.color;
     this.reset();
     this.lastTime = performance.now();
     Input.init();
@@ -942,12 +900,11 @@ class Game {
         if (this.state === 'start') this.openHangar();
         else if (this.state === 'hangar' || this.state === 'gameover') this.startGame();
       }
-      const num = { Digit1: 0, Digit2: 1, Digit3: 2, Numpad1: 0, Numpad2: 1, Numpad3: 2 }[e.code];
+      const num = Loadout.numKey(e.code);
       if (this.state === 'hangar') {
-        if (num !== undefined) this.selectRobot(ROBOT_ORDER[num]);
-        const ci = COLORS.findIndex(c => c.hex === this.colorHex);
-        if (e.code === 'ArrowDown' || e.code === 'ArrowLeft') this.selectColor(COLORS[(ci + 1) % COLORS.length].hex);
-        if (e.code === 'ArrowUp' || e.code === 'ArrowRight') this.selectColor(COLORS[(ci + COLORS.length - 1) % COLORS.length].hex);
+        const pick = Loadout.hangarKey(e.code, this.robotKey, this.colorHex);
+        if (pick && pick.robot) this.selectRobot(pick.robot);
+        if (pick && pick.color) this.selectColor(pick.color);
       } else if (this.state === 'upgrade' && num !== undefined && this.upgradeChoices[num]) {
         this.chooseUpgrade(this.upgradeChoices[num]);
       }
@@ -956,50 +913,17 @@ class Game {
 
   // ---------- hangar: pick robot + color ----------
   buildHangar() {
-    const cards = document.getElementById('robotCards');
-    this.previews = {};
-    ROBOT_ORDER.forEach((key, i) => {
-      const def = ROBOTS[key];
-      const btn = document.createElement('button');
-      btn.className = 'robot-card';
-      btn.dataset.robot = key;
-      const pips = n => '<span class="pips">' + [1, 2, 3].map(k => `<i class="${k <= n ? 'on' : ''}"></i>`).join('') + '</span>';
-      btn.innerHTML = `<canvas width="240" height="240"></canvas>
-        <div class="name">${i + 1}. ${def.name}</div>
-        <div class="desc">${def.desc}</div>
-        <div class="stat-row"><span>מהירות</span>${pips(def.bars.speed)}</div>
-        <div class="stat-row"><span>שריון</span>${pips(def.bars.armor)}</div>
-        <div class="stat-row"><span>כוח אש</span>${pips(def.bars.power)}</div>`;
-      btn.onclick = () => this.selectRobot(key);
-      cards.appendChild(btn);
-      this.previews[key] = btn.querySelector('canvas');
-    });
-    const sw = document.getElementById('colorSwatches');
-    for (const c of COLORS) {
-      const b = document.createElement('button');
-      b.className = 'swatch';
-      b.title = c.name;
-      b.style.background = c.hex;
-      b.style.color = c.hex;
-      b.dataset.color = c.hex;
-      b.onclick = () => this.selectColor(c.hex);
-      sw.appendChild(b);
-    }
+    this.previews = Loadout.buildHangar(k => this.selectRobot(k), c => this.selectColor(c), true);
     this.refreshHangar();
   }
 
   selectRobot(key) { this.robotKey = key; Audio_.powerup(); this.saveLoadout(); this.refreshHangar(); }
   selectColor(hex) { this.colorHex = hex; Audio_.tone(700, 0.08, 'triangle', 0.08, 1000); this.saveLoadout(); this.refreshHangar(); }
 
-  saveLoadout() {
-    try { localStorage.setItem('rs_loadout', JSON.stringify({ robot: this.robotKey, color: this.colorHex })); } catch (e) { /* ignore */ }
-  }
+  saveLoadout() { Loadout.save(this.robotKey, this.colorHex); }
 
   refreshHangar() {
-    const panel = document.getElementById('hangarScreen');
-    panel.style.setProperty('--pick', this.colorHex);
-    for (const btn of document.querySelectorAll('.robot-card')) btn.classList.toggle('selected', btn.dataset.robot === this.robotKey);
-    for (const b of document.querySelectorAll('.swatch')) b.classList.toggle('selected', b.dataset.color === this.colorHex);
+    Loadout.refreshHangar(this.robotKey, this.colorHex);
     this.drawPreviews(performance.now());
   }
 
@@ -1029,40 +953,19 @@ class Game {
 
   // ---------- upgrades between waves ----------
   showUpgrades() {
-    const p = this.player;
-    const pool = UPGRADES.filter(u =>
-      (!u.max || (p.upgrades[u.id] || 0) < u.max - 1) && (!u.ok || u.ok(p)));
-    this.shuffle(pool);
-    this.upgradeChoices = pool.slice(0, 3);
+    this.upgradeChoices = Loadout.rollUpgrades(this.player);
     this.state = 'upgrade';
     Input.keys.clear(); Input.virtual.clear();
-    document.getElementById('upgradeTitle').textContent = `גל ${this.wave} הושלם!`;
-    const box = document.getElementById('upgradeCards');
-    box.innerHTML = '';
-    this.upgradeChoices.forEach((u, i) => {
-      const lvl = p.upgrades[u.id] || 0;
-      const b = document.createElement('button');
-      b.className = 'upgrade-card';
-      b.innerHTML = `<div class="num">${i + 1}</div>
-        <div class="icon">${u.icon}</div>
-        <div class="name">${u.name}</div>
-        <div class="desc">${u.desc}</div>
-        <div class="level">${u.repeat ? '' : lvl ? `רמה ${lvl} ← ${lvl + 1}` : 'חדש!'}</div>`;
-      b.onclick = () => this.chooseUpgrade(u);
-      box.appendChild(b);
-    });
-    document.getElementById('upgradeScreen').classList.remove('hidden');
+    Loadout.showUpgradeScreen(this.wave, this.upgradeChoices, this.player, u => this.chooseUpgrade(u));
     Audio_.tone(440, 0.15, 'triangle', 0.1, 880);
   }
 
   chooseUpgrade(u) {
     if (this.state !== 'upgrade') return;
     const p = this.player;
-    u.apply(p);
-    p.upgrades[u.id] = (p.upgrades[u.id] || 0) + 1;
+    Loadout.applyUpgrade(p, u);
     Audio_.powerup();
     burst(this, p.x, p.y, p.color, 24, 180, 0.5);
-    document.getElementById('upgradeScreen').classList.add('hidden');
     this.state = 'playing';
     this.lastTime = performance.now();
     this.nextWave();
