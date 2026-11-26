@@ -99,6 +99,7 @@ const Input = {
   virtual: new Set(),
   init() {
     window.addEventListener('keydown', e => {
+      if (isTyping(e)) return;
       this.keys.add(e.code);
       if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space'].includes(e.code)) e.preventDefault();
     });
@@ -299,7 +300,7 @@ class PowerUp {
 // ---------- robot model ----------
 // Builds a walking biped: legs swing from the hips, the right arm is the gun.
 // `shape` picks the variant: 'dart' = slim with back fins, 'block' = wide with a rocket pod.
-function makeRobot(bodyColor, glowColor, scale, shape) {
+function makeRobot(bodyColor, glowColor, scale, shape, hat) {
   const root = new THREE.Group();
   const rig = new THREE.Group();
   rig.scale.setScalar(scale);
@@ -358,9 +359,42 @@ function makeRobot(bodyColor, glowColor, scale, shape) {
     torso.add(part(GEO.box, dark, 0.9, 0.7, 0.4, 0, 0.6, -0.55));
     torso.add(part(GEO.box, glow, 0.6, 0.08, 0.05, 0, 0.75, -0.76));
   }
+  addHat3D(torso, hat, glowColor);
   rig.add(torso);
 
   return { root, rig, legs, torso, blade, glow, armor };
+}
+
+// hats bought with points sit on top of the head (head top is at y 1.46 in torso space)
+function addHat3D(torso, hat, glowColor) {
+  if (!hat || hat === 'none') return;
+  if (hat === 'antenna') {
+    torso.add(part(GEO.box, metal(0xcfe3e8), 0.05, 0.6, 0.05, -0.12, 1.75, -0.05));
+    torso.add(part(GEO.sphere, metal(glowColor, glowColor, 1.4), 0.11, 0.11, 0.11, -0.12, 2.08, -0.05));
+  } else if (hat === 'horns') {
+    const bone = metal(0xf2ead3);
+    for (const side of [-1, 1]) {
+      const h = part(new THREE.ConeGeometry(0.1, 0.55, 8), bone, 1, 1, 1, side * 0.3, 1.62, 0.05);
+      h.rotation.z = -side * 0.6;
+      h.rotation.x = 0.25;
+      torso.add(h);
+    }
+  } else if (hat === 'mohawk') {
+    const m = metal(glowColor, glowColor, 0.9);
+    for (let i = 0; i < 4; i++) {
+      const sp = part(new THREE.ConeGeometry(0.08, 0.4 - Math.abs(i - 1.5) * 0.06, 6), m, 1, 1, 1, 0, 1.62, 0.2 - i * 0.14);
+      sp.rotation.x = -0.25;
+      torso.add(sp);
+    }
+  } else if (hat === 'crown') {
+    const gold = metal(0xffc83d, 0xffa000, 0.45);
+    torso.add(part(new THREE.CylinderGeometry(0.3, 0.28, 0.16, 14, 1, true), gold, 1, 1, 1, 0, 1.55, 0));
+    for (let i = 0; i < 6; i++) {
+      const a = (TAU / 6) * i;
+      torso.add(part(new THREE.ConeGeometry(0.06, 0.2, 5), gold, 1, 1, 1, Math.sin(a) * 0.29, 1.72, Math.cos(a) * 0.29));
+    }
+    torso.add(part(GEO.sphere, metal(0xff3b6b, 0xff3b6b, 0.8), 0.06, 0.06, 0.06, 0, 1.56, 0.3));
+  }
 }
 
 // ---------- obstacles ----------
@@ -387,8 +421,12 @@ const PX = 1 / 16;
 const MODEL_SCALE = { dart: 1.1, arrow: 1.3, block: 1.55 };
 
 class Player {
-  constructor(game, robotKey, colorHex) {
+  constructor(game, robotKey, colorHex, look) {
     const def = ROBOTS[robotKey] || ROBOTS.warrior;
+    this.colorHex = colorHex || '#4ff3ff';
+    this.hat = (look && look.hat) || 'none';
+    this.trail = (look && look.trail) || 'none';
+    this.trailTimer = 0;
     this.def = def;
     this.color = parseInt((colorHex || '#4ff3ff').slice(1), 16);
     this.scale = MODEL_SCALE[def.shape] || 1.3;
@@ -424,7 +462,7 @@ class Player {
     this.alive = true;
 
     const tint = new THREE.Color(0xdff7ff).lerp(new THREE.Color(this.color), 0.5).getHex();
-    this.model = makeRobot(tint, this.color, this.scale, def.shape);
+    this.model = makeRobot(tint, this.color, this.scale, def.shape, this.hat);
     game.scene.add(this.model.root);
     this.shieldMesh = new THREE.Mesh(GEO.sphere, new THREE.MeshBasicMaterial({ color: this.color, transparent: true, opacity: 0.18, depthWrite: false }));
     this.shieldMesh.scale.setScalar(1.8 * this.scale / 1.3);
@@ -476,6 +514,16 @@ class Player {
     }
     this.walk += dt * (mlen > 0 ? 11 : 0);
     const aim = this.aimAngle(game);
+
+    // trail bought in the hangar: little sparks behind the robot while it moves
+    this.trailTimer -= dt;
+    if (this.trail !== 'none' && mlen > 0 && this.trailTimer <= 0 && game.particles.length < 450) {
+      this.trailTimer = 0.035;
+      const bx = this.x - Math.sin(this.angle) * this.r, bz = this.z - Math.cos(this.angle) * this.r;
+      const hex = Shop.trailColor(this.trail, this.colorHex);
+      game.particles.push(new Particle(game, bx + rand(-0.3, 0.3), rand(0.4, 1.2), bz + rand(-0.3, 0.3),
+        rand(-1, 1), rand(0.5, 2.5), rand(-1, 1), 0.5, parseInt(hex.slice(1), 16), this.trail === 'fire' ? 1.5 : 1.1));
+    }
 
     // heat
     if (this.overheated) {
@@ -622,41 +670,105 @@ class Player {
 
 // ---------- enemies ----------
 const ENEMY_DEFS = {
-  scout:  { r: 0.8, hp: 22, speed: 12, color: 0xff5b4d, score: 60, contactDmg: 12, behavior: 'charge' },
-  gunner: { r: 0.95, hp: 34, speed: 7, color: 0xff8f3d, score: 90, contactDmg: 8, behavior: 'ranged',
-            fireRate: 1.3, bulletSpeed: 19, bulletDmg: 8 },
-  heavy:  { r: 1.5, hp: 90, speed: 4.4, color: 0xc23bff, score: 160, contactDmg: 10, behavior: 'slam',
-            slamRadius: 5.6, slamDmg: 26, slamCharge: 1.1 },
-  boss:   { r: 2.5, hp: 620, speed: 5.3, color: 0xff2d55, score: 900, contactDmg: 20, behavior: 'boss',
-            fireRate: 0.5, bulletSpeed: 16, bulletDmg: 10 },
+  scout:    { r: 0.8, hp: 22, speed: 12, color: 0xff5b4d, score: 60, contactDmg: 12, behavior: 'charge', shape: 'dart' },
+  gunner:   { r: 0.95, hp: 34, speed: 7, color: 0xff8f3d, score: 90, contactDmg: 8, behavior: 'ranged', shape: 'square',
+              fireRate: 1.3, bulletSpeed: 19, bulletDmg: 8 },
+  heavy:    { r: 1.5, hp: 90, speed: 4.4, color: 0xc23bff, score: 160, contactDmg: 10, behavior: 'slam', shape: 'hex',
+              slamRadius: 5.6, slamDmg: 26, slamCharge: 1.1 },
+  wasp:     { r: 0.75, hp: 18, speed: 14.4, color: 0xffe14d, score: 80, contactDmg: 10, behavior: 'zigzag', shape: 'wasp' },
+  spreader: { r: 1.0, hp: 40, speed: 5.6, color: 0xff5fa2, score: 110, contactDmg: 8, behavior: 'spread', shape: 'tri',
+              fireRate: 1.7, bulletSpeed: 16, bulletDmg: 7 },
+  splitter: { r: 1.25, hp: 55, speed: 6.6, color: 0x9dff4d, score: 120, contactDmg: 10, behavior: 'charge', shape: 'circle', splits: true },
+  mini:     { r: 0.56, hp: 10, speed: 13.4, color: 0x9dff4d, score: 20, contactDmg: 6, behavior: 'charge', shape: 'dart' },
+  boss:     { r: 2.5, hp: 800, speed: 5.3, color: 0xff2d55, score: 900, contactDmg: 20, behavior: 'boss', shape: 'boss',
+              fireRate: 0.5, bulletSpeed: 16, bulletDmg: 10 },
 };
 
-function makeEnemyModel(type, def) {
+// built-in enemy, or one made in the enemy builder ('c_<id>', stats in 2D pixels → scaled here)
+function enemyDef(type) {
+  if (ENEMY_DEFS[type]) return ENEMY_DEFS[type];
+  const c = CustomEnemies.get(type);
+  if (!c) return ENEMY_DEFS.scout;
+  const d = CustomEnemies.toDef(c);
+  return { ...d, r: d.r * PX, speed: d.speed * PX, bulletSpeed: d.bulletSpeed * PX, slamRadius: d.slamRadius * PX,
+           color: parseInt(d.color.slice(1), 16) };
+}
+
+// model size each shape was built for; other sizes are scaled from it
+const SHAPE_BASE_R = { dart: 0.8, square: 0.95, hex: 1.5, boss: 2.5, wasp: 0.75, tri: 1.0, circle: 1.25 };
+
+
+function makeEnemyModel(def) {
   const root = new THREE.Group();
+  const body = new THREE.Group(); // scaled to the enemy's size
+  root.add(body);
   const armor = metal(0x6a3a3e, def.color, 0.3);
   const glow = metal(def.color, def.color, 1.2);
   const parts = { root, armor, glow };
-  if (type === 'scout') {
+  const shape = SHAPE_BASE_R[def.shape] ? def.shape : 'dart';
+  body.scale.setScalar(def.r / SHAPE_BASE_R[shape]);
+  if (shape === 'dart') {
     // hovering arrowhead drone
-    const body = part(new THREE.ConeGeometry(0.7, 1.6, 4), armor, 1, 1, 1, 0, 1.0, 0);
-    body.rotation.x = Math.PI / 2;
-    root.add(body);
-    root.add(part(GEO.sphere, glow, 0.25, 0.25, 0.25, 0, 1.0, -0.5));
+    const cone = part(new THREE.ConeGeometry(0.7, 1.6, 4), armor, 1, 1, 1, 0, 1.0, 0);
+    cone.rotation.x = Math.PI / 2;
+    body.add(cone);
+    body.add(part(GEO.sphere, glow, 0.25, 0.25, 0.25, 0, 1.0, -0.5));
     parts.hover = true;
-  } else if (type === 'gunner') {
+  } else if (shape === 'square') {
     const r = makeRobot(0x9a5a3a, def.color, 1.05);
     r.armor.emissive.setHex(def.color); r.armor.emissiveIntensity = 0.12;
-    root.add(r.root);
+    body.add(r.root);
     parts.armor = r.armor; parts.robot = r;
-  } else if (type === 'heavy') {
-    root.add(part(new THREE.CylinderGeometry(1.4, 1.6, 1.6, 6), armor, 1, 1, 1, 0, 0.9, 0));
-    root.add(part(new THREE.CylinderGeometry(0.8, 1.1, 0.8, 6), armor, 1, 1, 1, 0, 2.0, 0));
-    root.add(part(GEO.box, glow, 0.9, 0.18, 0.1, 0, 2.05, 0.8));
-    for (const side of [-1, 1]) root.add(part(GEO.box, armor, 0.6, 1.4, 0.6, side * 1.7, 1.4, 0.2));
-  } else if (type === 'boss') {
+  } else if (shape === 'hex') {
+    body.add(part(new THREE.CylinderGeometry(1.4, 1.6, 1.6, 6), armor, 1, 1, 1, 0, 0.9, 0));
+    body.add(part(new THREE.CylinderGeometry(0.8, 1.1, 0.8, 6), armor, 1, 1, 1, 0, 2.0, 0));
+    body.add(part(GEO.box, glow, 0.9, 0.18, 0.1, 0, 2.05, 0.8));
+    for (const side of [-1, 1]) body.add(part(GEO.box, armor, 0.6, 1.4, 0.6, side * 1.7, 1.4, 0.2));
+  } else if (shape === 'wasp') {
+    // striped flying bug with flapping wings and a stinger
+    body.add(part(GEO.sphere, armor, 0.38, 0.32, 0.85, 0, 1.3, 0));
+    for (const z of [-0.15, -0.45]) body.add(part(GEO.box, glow, 0.62, 0.5, 0.08, 0, 1.3, z));
+    body.add(part(GEO.sphere, glow, 0.16, 0.16, 0.16, 0, 1.38, 0.78));
+    const sting = part(new THREE.ConeGeometry(0.1, 0.5, 6), glow, 1, 1, 1, 0, 1.3, -1.05);
+    sting.rotation.x = -Math.PI / 2;
+    body.add(sting);
+    const wingMat = new THREE.MeshBasicMaterial({ color: def.color, transparent: true, opacity: 0.45, side: THREE.DoubleSide });
+    parts.wings = [];
+    for (const side of [-1, 1]) {
+      const pivot = new THREE.Group();
+      pivot.position.set(side * 0.25, 1.55, 0);
+      const w = part(GEO.box, wingMat, 0.9, 0.03, 0.45, side * 0.45, 0, 0);
+      pivot.add(w);
+      body.add(pivot);
+      parts.wings.push({ pivot, side });
+    }
+    parts.hover = true;
+  } else if (shape === 'tri') {
+    // three-sided turret with a fan of barrels
+    const pyr = part(new THREE.ConeGeometry(1.0, 1.5, 3), armor, 1, 1, 1, 0, 0.75, 0);
+    body.add(pyr);
+    body.add(part(GEO.sphere, glow, 0.22, 0.22, 0.22, 0, 1.55, 0));
+    for (const a of [-0.45, 0, 0.45]) {
+      const holder = new THREE.Group();
+      holder.position.y = 0.8;
+      holder.rotation.y = a;
+      const barrel = part(new THREE.CylinderGeometry(0.09, 0.11, 0.9, 8), glow, 1, 1, 1, 0, 0, 0.85);
+      barrel.rotation.x = Math.PI / 2;
+      holder.add(barrel);
+      body.add(holder);
+    }
+  } else if (shape === 'circle') {
+    // rolling ball with a glowing crack around the middle
+    body.add(part(GEO.sphere, armor, 1.1, 1.1, 1.1, 0, 1.15, 0));
+    const ring = part(new THREE.TorusGeometry(1.12, 0.07, 8, 28), glow, 1, 1, 1, 0, 1.15, 0);
+    ring.rotation.y = Math.PI / 2;
+    body.add(ring);
+    body.add(part(GEO.sphere, glow, 0.22, 0.22, 0.22, 0, 1.25, 1.05));
+    parts.hover = true;
+  } else { // boss
     const r = makeRobot(0x7a2a38, def.color, 2.4);
     r.armor.emissive.setHex(def.color); r.armor.emissiveIntensity = 0.15;
-    root.add(r.root);
+    body.add(r.root);
     r.torso.add(part(GEO.box, glow, 0.2, 0.6, 0.2, 0, 1.75, 0)); // antenna
     parts.armor = r.armor; parts.robot = r;
   }
@@ -666,8 +778,9 @@ function makeEnemyModel(type, def) {
 
 class Enemy {
   constructor(game, x, z, type) {
-    const d = ENEMY_DEFS[type];
+    const d = enemyDef(type);
     this.type = type; this.def = d;
+    this.zig = rand(0, TAU);
     this.x = x; this.z = z; this.r = d.r;
     this.hp = d.hp; this.maxHp = d.hp;
     this.speed = d.speed;
@@ -682,7 +795,7 @@ class Enemy {
     this.bossTimer = 2;
     this.walk = rand(0, TAU);
 
-    this.model = makeEnemyModel(type, d);
+    this.model = makeEnemyModel(d);
     game.scene.add(this.model.root);
 
     if (this.behavior === 'slam') {
@@ -716,6 +829,13 @@ class Enemy {
       game.addRing(this.x, this.z, 0.5, big ? 9 : 3, 0.35, this.def.color);
       game.shake = Math.min(1.6, game.shake + (big ? 1.2 : 0.3));
       game.onEnemyKilled(this);
+      if (this.def.splits) {
+        for (const s of [-1, 1]) {
+          const m = new Enemy(game, this.x + s * this.r * 0.6, this.z - s * this.r * 0.6, 'mini');
+          m.knockX = s * 14; m.knockZ = -s * 14;
+          game.enemies.push(m);
+        }
+      }
     }
   }
 
@@ -733,13 +853,21 @@ class Enemy {
 
     if (this.behavior === 'charge') {
       step(1);
-    } else if (this.behavior === 'ranged') {
+    } else if (this.behavior === 'zigzag') {
+      this.zig += dt * 6;
+      const za = a + Math.sin(this.zig) * 1.0;
+      this.x += Math.sin(za) * this.speed * dt;
+      this.z += Math.cos(za) * this.speed * dt;
+      this.angle = za;
+      moving = true;
+    } else if (this.behavior === 'ranged' || this.behavior === 'spread') {
       const desired = 16;
       step(d < desired - 1.2 ? -1 : d > desired + 1.2 ? 1 : 0);
       this.fireTimer -= dt;
       if (this.fireTimer <= 0 && d < 32) {
         this.fireTimer = this.def.fireRate * rand(0.85, 1.15);
-        game.bullets.push(new Bullet(game, this.x, this.z, a, this.def.bulletSpeed, this.def.bulletDmg, 'enemy', 0xff8f3d, 0.3));
+        const angles = this.behavior === 'spread' ? [a - 0.28, a, a + 0.28] : [a];
+        for (const sa of angles) game.bullets.push(new Bullet(game, this.x, this.z, sa, this.def.bulletSpeed, this.def.bulletDmg, 'enemy', this.def.color, 0.3));
         Audio_.enemyShoot();
       }
     } else if (this.behavior === 'slam') {
@@ -811,6 +939,7 @@ class Enemy {
     m.root.position.set(this.x, 0, this.z);
     m.root.rotation.y = this.angle;
     if (m.hover) m.root.position.y = Math.sin(this.walk * 0.7) * 0.2;
+    if (m.wings) for (const w of m.wings) w.pivot.rotation.z = w.side * Math.sin(performance.now() / 35) * 0.6;
     if (m.robot) {
       const swing = Math.sin(this.walk) * 0.5;
       m.robot.legs[0].rotation.x = swing;
@@ -862,6 +991,10 @@ class Game {
     const saved = Loadout.load();
     this.robotKey = saved.robot;
     this.colorHex = saved.color;
+    this.hat = saved.hat;
+    this.trail = saved.trail;
+    this.upgradeLog = [];
+    this.levelStartLog = [];
     this.buildScene();
     this.reset();
     this.resize();
@@ -935,13 +1068,15 @@ class Game {
     this.upgradeTimer = 0;
     this.upgradeChoices = [];
     this.camFocus.set(0, 0, 0);
+    this.levels = Campaign.build();
+    this.pointsEarned = 0;
     this.player.syncModel();
   }
 
   // (re)build the player's robot from the current hangar choice
   makePlayer() {
     if (this.player) this.scene.remove(this.player.model.root);
-    this.player = new Player(this, this.robotKey, this.colorHex);
+    this.player = new Player(this, this.robotKey, this.colorHex, { hat: this.hat, trail: this.trail });
     this.player.syncModel();
   }
 
@@ -966,18 +1101,31 @@ class Game {
   bindUI() {
     document.getElementById('startBtn').onclick = () => this.openHangar();
     document.getElementById('restartBtn').onclick = () => this.startGame();
+    document.getElementById('retryBtn').onclick = () => this.retryLevel();
+    document.getElementById('victoryAgainBtn').onclick = () => this.startGame();
+    document.getElementById('victoryHangarBtn').onclick = () => this.openHangar();
+    document.getElementById('builderBtnStart').onclick = () => this.openBuilder('startScreen');
+    document.getElementById('builderBtnHangar').onclick = () => this.openBuilder('hangarScreen');
+    document.getElementById('victoryBuilderBtn').onclick = () => this.openBuilder('victoryScreen');
+    Loadout.bindTabs();
+    Shop.build(document.getElementById('designPane'),
+      () => ({ color: this.colorHex, hat: this.hat, trail: this.trail }),
+      patch => this.applyLook(patch));
     document.getElementById('changeRobotBtn').onclick = () => this.openHangar();
     document.getElementById('battleBtn').onclick = () => this.startGame();
     Loadout.buildHangar(k => this.selectRobot(k), c => this.selectColor(c), false);
     document.getElementById('resumeBtn').onclick = () => this.togglePause(false);
     window.addEventListener('keydown', e => {
+      if (this.state === 'builder') { if (e.code === 'Escape') Builder.close(); return; }
+      if (isTyping(e)) return;
       if (e.code === 'Escape' || e.code === 'KeyP') {
         if (this.state === 'playing') this.togglePause(true);
         else if (this.state === 'paused') this.togglePause(false);
       }
       if (e.code === 'Enter') {
         if (this.state === 'start') this.openHangar();
-        else if (this.state === 'hangar' || this.state === 'gameover') this.startGame();
+        else if (this.state === 'hangar' || this.state === 'victory') this.startGame();
+        else if (this.state === 'gameover') this.retryLevel();
       }
       if (this.state === 'hangar') {
         const pick = Loadout.hangarKey(e.code, this.robotKey, this.colorHex);
@@ -993,11 +1141,34 @@ class Game {
   // ---------- hangar: the chosen robot turns on the arena floor ----------
   openHangar() {
     this.state = 'hangar';
-    for (const id of ['startScreen', 'gameOverScreen']) document.getElementById(id).classList.add('hidden');
+    for (const id of ['startScreen', 'gameOverScreen', 'victoryScreen']) document.getElementById(id).classList.add('hidden');
     document.getElementById('hud').classList.add('hidden');
     document.getElementById('hangarScreen').classList.remove('hidden');
+    Campaign.hideIntro();
     this.reset();
     this.refreshHangar();
+  }
+
+  // ---------- enemy builder: opens over a menu screen and returns to it ----------
+  openBuilder(fromId) {
+    const prev = this.state;
+    this.state = 'builder';
+    document.getElementById(fromId).classList.add('hidden');
+    Builder.open(() => {
+      this.state = prev;
+      document.getElementById(fromId).classList.remove('hidden');
+      this.levels = Campaign.build();
+      if (prev === 'hangar') this.refreshHangar();
+    });
+  }
+
+  // something from the "design with points" tab was bought or picked
+  applyLook(patch) {
+    if (patch.color) this.colorHex = patch.color;
+    if (patch.hat) this.hat = patch.hat;
+    if (patch.trail) this.trail = patch.trail;
+    Audio_.powerup();
+    this.afterLoadoutChange();
   }
 
   selectRobot(key) {
@@ -1013,7 +1184,7 @@ class Game {
   }
 
   afterLoadoutChange() {
-    Loadout.save(this.robotKey, this.colorHex);
+    Loadout.save({ robot: this.robotKey, color: this.colorHex, hat: this.hat, trail: this.trail });
     const angle = this.player.angle;
     this.makePlayer();
     this.player.angle = angle;
@@ -1021,7 +1192,7 @@ class Game {
     this.refreshHangar();
   }
 
-  refreshHangar() { Loadout.refreshHangar(this.robotKey, this.colorHex); }
+  refreshHangar() { Loadout.refreshHangar(this.robotKey, this.colorHex); Shop.refresh(); }
 
   // ---------- upgrades between waves ----------
   showUpgrades() {
@@ -1036,6 +1207,7 @@ class Game {
     if (this.state !== 'upgrade') return;
     const p = this.player;
     Loadout.applyUpgrade(p, u);
+    this.upgradeLog.push(u.id);
     Audio_.powerup();
     burst(this, p.x, 1.5, p.z, p.color, 24, 10, 0.6);
     this.state = 'playing';
@@ -1048,48 +1220,62 @@ class Game {
     document.getElementById('pauseScreen').classList.toggle('hidden', !pause);
   }
 
-  startGame() {
+  // fromLevel/log let "try this level again" rebuild the robot with the upgrades it had then
+  startGame(fromLevel, log) {
     this.reset();
+    this.upgradeLog = (log || []).slice();
+    const p = this.player;
+    for (const id of this.upgradeLog) {
+      const u = UPGRADES.find(x => x.id === id);
+      if (u) { u.apply(p); p.upgrades[id] = (p.upgrades[id] || 0) + 1; }
+    }
+    p.health = p.maxHealth;
+    this.wave = (fromLevel || 1) - 1;
     this.state = 'playing';
-    for (const id of ['startScreen', 'gameOverScreen', 'hangarScreen', 'upgradeScreen']) document.getElementById(id).classList.add('hidden');
+    for (const id of ['startScreen', 'gameOverScreen', 'hangarScreen', 'upgradeScreen', 'victoryScreen']) document.getElementById(id).classList.add('hidden');
     document.getElementById('hud').classList.remove('hidden');
     document.getElementById('score').textContent = 0;
     document.getElementById('highscore').textContent = this.loadHighscore();
+    Points.refresh();
     this.nextWave();
   }
+
+  retryLevel() { this.startGame(Math.min(this.wave, this.levels.length), this.levelStartLog); }
 
   loadHighscore() {
     try { return Number(localStorage.getItem('rs3d_highscore') || 0); } catch (e) { return 0; }
   }
 
+  get level() { return this.levels[this.wave - 1]; }
+
   nextWave() {
     this.wave++;
-    document.getElementById('wave').textContent = this.wave;
-    const banner = document.getElementById('waveBanner');
-    banner.textContent = this.wave % 5 === 0 ? `גל ${this.wave} — בוס!` : `גל ${this.wave}`;
-    banner.classList.add('hidden');
-    void banner.offsetWidth; // restart the CSS animation
-    banner.classList.remove('hidden');
-    clearTimeout(this.bannerTO);
-    this.bannerTO = setTimeout(() => banner.classList.add('hidden'), 1500);
-
-    const list = [];
-    const n = 3 + this.wave * 2;
-    for (let i = 0; i < n; i++) {
-      let type = 'scout';
-      const roll = Math.random();
-      if (this.wave >= 2 && roll < 0.3) type = 'gunner';
-      if (this.wave >= 3 && roll < 0.15) type = 'heavy';
-      list.push(type);
-    }
-    if (this.wave % 5 === 0) list.push('boss');
-    for (let i = list.length - 1; i > 0; i--) {
-      const j = (Math.random() * (i + 1)) | 0;
-      [list[i], list[j]] = [list[j], list[i]];
-    }
-    this.spawnQueue = list;
-    this.spawnTimer = 0.6;
+    this.levelStartLog = this.upgradeLog.slice();
+    document.getElementById('wave').textContent = `${this.wave}/${this.levels.length}`;
+    Campaign.showIntro(this.wave, this.levels.length, this.level.type);
+    this.spawnQueue = Campaign.spawnList(this.level);
+    this.spawnTimer = 2.2; // let the "new enemy" card show first
     this.waveActive = true;
+  }
+
+  earn(n) {
+    n = Math.round(n);
+    this.pointsEarned += n;
+    Points.add(n);
+  }
+
+  onVictory() {
+    this.state = 'victory';
+    Campaign.hideIntro();
+    this.earn(300);
+    Audio_.tone(523, 0.18, 'triangle', 0.15, 784);
+    setTimeout(() => Audio_.tone(784, 0.3, 'triangle', 0.15, 1046), 180);
+    for (let i = 0; i < 4; i++) burst(this, this.player.x + rand(-3, 3), 2, this.player.z + rand(-3, 3), pick([0xffd447, 0x4ff3ff, 0xff78f0, 0x4fe07d]), 30, 14, 1.2);
+    const hs = Math.max(this.score, this.loadHighscore());
+    try { localStorage.setItem('rs3d_highscore', hs); } catch (e) { /* storage blocked */ }
+    document.getElementById('victoryStats').textContent = `ניקוד: ${this.score}   |   הרווחת ${this.pointsEarned} נקודות 💰 (כולל 300 בונוס ניצחון)`;
+    document.getElementById('victoryScreen').classList.remove('hidden');
+    document.getElementById('hud').classList.add('hidden');
   }
 
   spawnPos() {
@@ -1104,6 +1290,7 @@ class Game {
   onEnemyKilled(enemy) {
     this.score += enemy.def.score;
     document.getElementById('score').textContent = this.score;
+    this.earn(enemy.def.score / 10);
     if (Math.random() < 0.18) {
       this.powerups.push(new PowerUp(this, enemy.x, enemy.z, pick(['health', 'overdrive', 'shield'])));
     }
@@ -1155,10 +1342,15 @@ class Game {
       this.waveActive = false;
       this.score += 50 * this.wave;
       document.getElementById('score').textContent = this.score;
-      this.upgradeTimer = 1.2; // short breather, then the upgrade screen
+      this.earn(5 * this.wave);
+      this.upgradeTimer = 1.2; // short breather, then the upgrade screen (or the win screen)
     } else if (this.upgradeTimer > 0) {
       this.upgradeTimer -= dt;
-      if (this.upgradeTimer <= 0) { this.upgradeTimer = 0; this.showUpgrades(); return; }
+      if (this.upgradeTimer <= 0) {
+        this.upgradeTimer = 0;
+        if (this.level.final) this.onVictory(); else this.showUpgrades();
+        return;
+      }
     }
 
     for (const e of this.enemies) e.update(dt, this);
@@ -1253,7 +1445,9 @@ class Game {
     this.scene.remove(this.player.model.root);
     const hs = Math.max(this.score, this.loadHighscore());
     try { localStorage.setItem('rs3d_highscore', hs); } catch (e) { /* storage blocked */ }
-    document.getElementById('finalStats').textContent = `ניקוד: ${this.score}   |   גל: ${this.wave}   |   שיא: ${hs}`;
+    Campaign.hideIntro();
+    document.getElementById('finalStats').textContent = `הגעת לשלב ${this.wave} מתוך ${this.levels.length}   |   ניקוד: ${this.score}   |   הרווחת ${this.pointsEarned} נקודות 💰`;
+    document.getElementById('retryBtn').textContent = `נסה שוב את שלב ${this.wave}`;
     document.getElementById('gameOverScreen').classList.remove('hidden');
     document.getElementById('hud').classList.add('hidden');
   }
@@ -1291,7 +1485,7 @@ class Game {
     this.lastTime = now;
     this.update(dt);
     // keep particles settling and the camera moving on the game-over screen
-    if (this.state === 'gameover') {
+    if (this.state === 'gameover' || this.state === 'victory') {
       for (const pt of this.particles) pt.update(dt);
       this.particles = this.prune(this.particles, p => p.life <= 0);
     }

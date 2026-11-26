@@ -48,17 +48,32 @@ const Loadout = {
   STORAGE_KEY: 'rs_loadout', // shared so both games remember the same robot
 
   load() {
-    const out = { robot: 'warrior', color: COLORS[0].hex };
+    const out = { robot: 'warrior', color: COLORS[0].hex, hat: 'none', trail: 'none' };
     try {
       const saved = JSON.parse(localStorage.getItem(this.STORAGE_KEY) || '{}');
       if (ROBOTS[saved.robot]) out.robot = saved.robot;
-      if (COLORS.some(c => c.hex === saved.color)) out.color = saved.color;
+      const premium = PREMIUM_COLORS.find(c => c.hex === saved.color);
+      if (COLORS.some(c => c.hex === saved.color) || (premium && Shop.has(premium.id))) out.color = saved.color;
+      if (HATS.some(h => h.id === saved.hat) && Shop.has(saved.hat)) out.hat = saved.hat;
+      if (TRAILS.some(t => t.id === saved.trail) && Shop.has(saved.trail)) out.trail = saved.trail;
     } catch (e) { /* storage unavailable */ }
     return out;
   },
 
-  save(robot, color) {
-    try { localStorage.setItem(this.STORAGE_KEY, JSON.stringify({ robot, color })); } catch (e) { /* ignore */ }
+  save(look) {
+    const { robot, color, hat, trail } = look;
+    try { localStorage.setItem(this.STORAGE_KEY, JSON.stringify({ robot, color, hat, trail })); } catch (e) { /* ignore */ }
+  },
+
+  // the "robot" / "design with points" tabs in the hangar
+  bindTabs() {
+    for (const t of document.querySelectorAll('#hangarScreen .tab')) {
+      t.onclick = () => this.showTab(t.dataset.tab);
+    }
+  },
+  showTab(name) {
+    for (const t of document.querySelectorAll('#hangarScreen .tab')) t.classList.toggle('selected', t.dataset.tab === name);
+    for (const p of document.querySelectorAll('#hangarScreen .tab-pane')) p.classList.toggle('hidden', p.dataset.pane !== name);
   },
 
   // fills #robotCards and #colorSwatches; returns { robotKey: canvas } when withPreview
@@ -126,7 +141,7 @@ const Loadout = {
   },
 
   showUpgradeScreen(wave, choices, p, onChoose) {
-    document.getElementById('upgradeTitle').textContent = `גל ${wave} הושלם!`;
+    document.getElementById('upgradeTitle').textContent = `שלב ${wave} הושלם!`;
     const box = document.getElementById('upgradeCards');
     box.innerHTML = '';
     choices.forEach((u, i) => {
