@@ -28,7 +28,8 @@
     </div>
     <div class="hud-side">
       <div class="stat"><span class="stat-label">ניקוד</span><span id="score">0</span></div>
-      <div class="stat"><span class="stat-label">גל</span><span id="wave">1</span></div>
+      <div class="stat"><span class="stat-label">שלב</span><span id="wave">1</span></div>
+      <div class="stat"><span class="stat-label">נקודות 💰</span><span class="pointsVal">0</span></div>
       <div class="stat"><span class="stat-label">שיא</span><span id="highscore">0</span></div>
     </div>
     <div id="waveBanner" class="wave-banner hidden"></div>
@@ -55,9 +56,36 @@
         <div class="row"><span class="key">Shift</span> דאש התחמקות</div>
         <div class="row"><span class="key">Esc</span> השהיה</div>
       </div>
-      <p class="hint">לחצו Enter או על הכפתור כדי להתחיל. שרוד גל אחר גל של רובוטים עוינים. הנשק מתחמם — אל תירה בלי הפסקה. אספו שדרוגים מרובוטים מושמדים.</p>
-      <button id="startBtn" class="btn">התחל קרב</button>
+      <p class="hint">יש 7 שלבים (ועוד שלב לכל אויב שבניתם), ובכל שלב מגיע אויב חדש. בסוף מחכה הבוס הגדול — תנצחו אותו ותסיימו את המשחק! על כל אויב מקבלים נקודות 💰 שאפשר לקנות בהן עיצוב לרובוט. ואפשר גם לבנות אויבים משלכם.</p>
+      <button id="startBtn" class="btn">בחר רובוט</button>
+      <div><button id="builderBtnStart" class="link-btn as-button">🛠️ בונה אויבים</button></div>
       <div><a class="link-btn" href="3d/index.html">לגרסת התלת ממד ←</a></div>
+    </div>
+  </div>
+
+  <div id="hangarScreen" class="overlay hidden">
+    <div class="panel wide">
+      <h2>בחר את הרובוט שלך</h2>
+      <div class="points-badge">💰 <span class="pointsVal">0</span> נקודות</div>
+      <div class="tabs"><button class="tab selected" data-tab="robot">🤖 רובוט</button><button class="tab" data-tab="design">🎨 עיצוב בנקודות</button></div>
+      <div class="tab-pane" data-pane="robot">
+        <div id="robotCards" class="robot-cards"></div>
+        <h3 class="section-title">צבע</h3>
+        <div id="colorSwatches" class="swatches"></div>
+      </div>
+      <div id="designPane" class="tab-pane hidden" data-pane="design"></div>
+      <button id="battleBtn" class="btn">יציאה לקרב!</button>
+      <div><button id="builderBtnHangar" class="link-btn as-button">🛠️ בונה אויבים</button></div>
+      <p class="hint small">מקשים: 1/2/3 לבחירת רובוט · ↑/↓ לצבע · Enter להתחלה</p>
+    </div>
+  </div>
+
+  <div id="upgradeScreen" class="overlay hidden">
+    <div class="panel wide">
+      <h2 id="upgradeTitle">גל הושלם!</h2>
+      <p class="subtitle">בחר שדרוג אחד לרובוט שלך</p>
+      <div id="upgradeCards" class="upgrade-cards"></div>
+      <p class="hint small">לחצו על שדרוג או על המקשים 1 / 2 / 3</p>
     </div>
   </div>
 
@@ -72,10 +100,14 @@
     <div class="panel">
       <h2 class="danger">הרובוט הושמד</h2>
       <p id="finalStats" class="subtitle"></p>
-      <button id="restartBtn" class="btn">קרב מחדש</button>
+      <button id="retryBtn" class="btn">נסה שוב את השלב</button>
+      <div><button id="restartBtn" class="link-btn as-button">התחל מהשלב הראשון</button></div>
+      <div><button id="changeRobotBtn" class="link-btn as-button">החלף רובוט</button></div>
     </div>
   </div>
 </div>
+<script src="loadout.js" defer></script>
+<script src="extras.js" defer></script>
 <script src="game.js" defer></script>
 </body>
 </html>
